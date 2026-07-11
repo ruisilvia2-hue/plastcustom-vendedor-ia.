@@ -142,7 +142,13 @@ def enviar_whatsapp(telefone, mensagem, instance="automacao"):
     url = f"{EVOLUTION_URL}/message/sendText/{instance}"
     headers = {"Content-Type": "application/json", "apikey": EVOLUTION_KEY}
     payload = {"number": telefone, "options": {"delay": 1500, "presence": "composing"}, "textMessage": {"text": mensagem}}
-    requests.post(url, json=payload, headers=headers, timeout=10)
+    print(f"Enviando para {telefone} via {instance}")
+    print(f"URL: {url}")
+    try:
+        r = requests.post(url, json=payload, headers=headers, timeout=10)
+        print(f"Status: {r.status_code} | Resposta: {r.text[:200]}")
+    except Exception as e:
+        print(f"Erro ao enviar: {e}")
 
 def notificar_proprietario(cliente, score, conversa_id):
     db = get_db()
