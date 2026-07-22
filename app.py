@@ -57,6 +57,110 @@ PRECOS_PP = {
 MATERIAIS_VALIDOS = ["Virgem BD", "Virgem AD", "Reciclado Cor", "Reciclado Sem Cor", "Polipropileno (PP)"]
 PRODUTOS_VALIDOS = ["Sacola Camiseta", "Sacola Vazada", "Saco Impresso Solda Fundo", "Saco com Aba"]
 
+# ============================================================
+# TABELA DE CILINDROS DE IMPRESSÃO — portada da calculadora HTML
+# Determina quais larguras/alturas são tecnicamente possíveis de imprimir
+# ============================================================
+TABELA_CILINDRO_IMPRESSORA = [
+    {"impressora": 1, "cilindro": 28, "cores": 3}, {"impressora": 1, "cilindro": 29, "cores": 4},
+    {"impressora": 1, "cilindro": 30, "cores": 4}, {"impressora": 1, "cilindro": 32, "cores": 3},
+    {"impressora": 1, "cilindro": 34, "cores": 4}, {"impressora": 1, "cilindro": 36, "cores": 4},
+    {"impressora": 1, "cilindro": 38, "cores": 4}, {"impressora": 1, "cilindro": 40, "cores": 4},
+    {"impressora": 1, "cilindro": 42, "cores": 3}, {"impressora": 1, "cilindro": 46, "cores": 2},
+    {"impressora": 1, "cilindro": 50, "cores": 4}, {"impressora": 1, "cilindro": 52, "cores": 4},
+    {"impressora": 1, "cilindro": 58, "cores": 4}, {"impressora": 1, "cilindro": 60, "cores": 4},
+    {"impressora": 1, "cilindro": 68, "cores": 4}, {"impressora": 1, "cilindro": 70, "cores": 4},
+    {"impressora": 1, "cilindro": 72, "cores": 2}, {"impressora": 1, "cilindro": 100, "cores": 2},
+    {"impressora": 2, "cilindro": 28, "cores": 3}, {"impressora": 2, "cilindro": 29, "cores": 4},
+    {"impressora": 2, "cilindro": 30, "cores": 4}, {"impressora": 2, "cilindro": 32, "cores": 3},
+    {"impressora": 2, "cilindro": 34, "cores": 4}, {"impressora": 2, "cilindro": 36, "cores": 4},
+    {"impressora": 2, "cilindro": 38, "cores": 4}, {"impressora": 2, "cilindro": 40, "cores": 4},
+    {"impressora": 2, "cilindro": 42, "cores": 3}, {"impressora": 2, "cilindro": 46, "cores": 2},
+    {"impressora": 2, "cilindro": 50, "cores": 4}, {"impressora": 2, "cilindro": 52, "cores": 4},
+    {"impressora": 2, "cilindro": 58, "cores": 4}, {"impressora": 2, "cilindro": 60, "cores": 4},
+    {"impressora": 2, "cilindro": 68, "cores": 4}, {"impressora": 2, "cilindro": 70, "cores": 4},
+    {"impressora": 2, "cilindro": 72, "cores": 2}, {"impressora": 2, "cilindro": 100, "cores": 2},
+    {"impressora": 3, "cilindro": 30, "cores": 6}, {"impressora": 3, "cilindro": 35, "cores": 6},
+    {"impressora": 3, "cilindro": 42, "cores": 6}, {"impressora": 3, "cilindro": 50, "cores": 6},
+    {"impressora": 3, "cilindro": 55, "cores": 4}, {"impressora": 3, "cilindro": 60, "cores": 6},
+    {"impressora": 3, "cilindro": 70, "cores": 6}, {"impressora": 3, "cilindro": 80, "cores": 5},
+    {"impressora": 3, "cilindro": 90, "cores": 2}, {"impressora": 3, "cilindro": 100, "cores": 4},
+]
+CILINDROS_DISPONIVEIS = sorted({c["cilindro"] for c in TABELA_CILINDRO_IMPRESSORA})
+
+LARGURAS_SACOLA_CAMISETA_PERMITIDAS = [30, 35, 38, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90]
+
+# Para cada produto: qual dimensão (largura ou altura) é limitada pelo cilindro de impressão,
+# e quantas "repetições" da medida cabem no cilindro (ex.: Sacola Vazada permite até 3x a largura)
+PRODUTO_REGRA_CILINDRO = {
+    "Sacola Camiseta": {"dimensao": "altura", "max_rep": 1},
+    "Sacola Vazada": {"dimensao": "largura", "max_rep": 3},
+    "Saco Impresso Solda Fundo": {"dimensao": "altura", "max_rep": 4},
+    "Saco com Aba": {"dimensao": "largura", "max_rep": 4},
+}
+
+def largura_camiseta_mais_proxima(largura):
+    return min(LARGURAS_SACOLA_CAMISETA_PERMITIDAS, key=lambda v: abs(v - largura))
+
+def disponibilidade_cilindro(medida_base, cores_n, max_rep, produto):
+    """Para cada repetição possível (1x, 2x, 3x...) verifica se existe cilindro compatível."""
+    resultados = []
+    for rep in range(1, max_rep + 1):
+        alvo = medida_base * rep
+        itens = [c for c in TABELA_CILINDRO_IMPRESSORA if abs(c["cilindro"] - alvo) < 1e-6]
+        # Caso especial da calculadora: medida 48 aceita o cilindro de 50 para esses 2 produtos
+        if not itens and produto in ("Sacola Camiseta", "Saco Impresso Solda Fundo") and abs(alvo - 48) < 1e-6:
+            itens = [c for c in TABELA_CILINDRO_IMPRESSORA if c["cilindro"] == 50]
+        if itens:
+            max_cores = max(c["cores"] for c in itens)
+            resultados.append({"disponivel": True, "ok_cores": cores_n == 0 or cores_n <= max_cores})
+    return resultados
+
+def medida_cilindro_valida(produto, medida, cores_n, max_rep):
+    return any(r["disponivel"] and r["ok_cores"] for r in disponibilidade_cilindro(medida, cores_n, max_rep, produto))
+
+def medida_cilindro_mais_proxima(produto, medida, cores_n, max_rep):
+    """Busca, entre todos os cilindros compatíveis, a medida-base mais próxima do que o cliente pediu."""
+    melhor, melhor_dist = None, None
+    for c in TABELA_CILINDRO_IMPRESSORA:
+        if cores_n > 0 and c["cores"] < cores_n:
+            continue
+        for rep in range(1, max_rep + 1):
+            candidato = round(c["cilindro"] / rep, 2)
+            if candidato <= 0 or not medida_cilindro_valida(produto, candidato, cores_n, max_rep):
+                continue
+            dist = abs(candidato - medida)
+            if melhor is None or dist < melhor_dist or (dist == melhor_dist and candidato < melhor):
+                melhor, melhor_dist = candidato, dist
+    return melhor
+
+def ajustar_tamanho(produto, largura, altura, cores_n):
+    """Ajusta largura/altura para os valores tecnicamente possíveis (com cilindro de impressão
+    disponível), igual a calculadora faz automaticamente. Retorna (largura, altura, lista_de_ajustes)."""
+    largura = float(largura); altura = float(altura); cores_n = int(cores_n)
+    ajustes = []
+
+    if produto == "Sacola Camiseta":
+        nova_largura = largura_camiseta_mais_proxima(largura)
+        if abs(nova_largura - largura) > 0.01:
+            ajustes.append(f"largura ajustada de {largura:g}cm para {nova_largura:g}cm (medida disponível)")
+            largura = nova_largura
+
+    regra = PRODUTO_REGRA_CILINDRO.get(produto)
+    if regra:
+        dim, max_rep = regra["dimensao"], regra["max_rep"]
+        valor_atual = altura if dim == "altura" else largura
+        if not medida_cilindro_valida(produto, valor_atual, cores_n, max_rep):
+            novo = medida_cilindro_mais_proxima(produto, valor_atual, cores_n, max_rep)
+            if novo:
+                ajustes.append(f"{dim} ajustada de {valor_atual:g}cm para {novo:g}cm (cilindro de impressão disponível para {cores_n} cores)")
+                if dim == "altura":
+                    altura = novo
+                else:
+                    largura = novo
+
+    return largura, altura, ajustes
+
 # Espessuras oficiais por produto (mm) — cada produto tem sua própria faixa
 ESPESSURAS_POR_PRODUTO = {
     "Sacola Camiseta": [0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.028, 0.035, 0.045],
@@ -222,7 +326,12 @@ PRODUTOS:
 3. Saco Impresso Solda Fundo - saco liso com solda no fundo
 4. Saco com Aba - saco com dobra superior
 
-TAMANHOS: 30x40 / 40x50 / 50x60 / 60x80 / 80x100 cm
+TAMANHOS: largura e altura são flexíveis dentro do que a produção consegue imprimir (não é uma lista curta fixa!).
+  O sistema valida automaticamente se o tamanho pedido tem cilindro de impressão disponível; se não tiver,
+  ele já ajusta para o tamanho tecnicamente mais próximo. Quando o contexto trouxer "AJUSTE DE TAMANHO",
+  informe isso ao cliente de forma transparente (ex: "a largura mais próxima disponível é X, vou usar essa").
+  NUNCA diga que um tamanho "não existe" ou "não é padrão" por conta própria - pergunte o tamanho desejado
+  livremente e deixe o sistema validar.
 MATERIAIS: Virgem BD (padrão) / Virgem AD (resistente) / PP (transparente) / Reciclado
 ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa, pergunte a espessura SOMENTE depois de saber o produto:
   - Sacola Camiseta: 0,003 / 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,028 / 0,035 / 0,045
@@ -231,8 +340,9 @@ ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa, pergunte a
 IMPRESSÃO: até 6 cores, frente e/ou verso. Clichê cobrado à parte na primeira compra.
 
 COMO APRESENTAR AS OPÇÕES — MUITO IMPORTANTE:
-- Sempre que for perguntar produto, material, tamanho, espessura ou número de cores, apresente as opções
+- Sempre que for perguntar produto, material, espessura ou número de cores, apresente as opções
   em formato de lista curta (menu), para o cliente só escolher — não faça pergunta totalmente aberta.
+- Tamanho (largura x altura) É pergunta aberta - não existe uma lista curta fixa de tamanhos.
 - Ao perguntar a espessura, use APENAS a lista de espessuras do produto que o cliente já escolheu (nunca ofereça
   um valor que não esteja na lista daquele produto específico). Se o cliente pedir um valor fora da lista,
   explique que não está disponível para aquele produto e mostre de novo as opções válidas dele.
@@ -259,7 +369,7 @@ CONDIÇÕES:
 FLUXO DE VENDA:
 1. Cumprimente e pergunte o tipo de negócio
 2. Pergunte qual produto precisa (apresente as opções)
-3. Pergunte o tamanho (apresente as opções)
+3. Pergunte o tamanho (largura x altura em cm) - pergunta aberta, não é lista fixa; o sistema ajusta automaticamente se necessário
 4. Pergunte o material (apresente as opções: Virgem BD - padrão / Virgem AD - resistente / PP - transparente / Reciclado)
 5. Pergunte a espessura, usando a lista específica do produto já escolhido, explicando as faixas e sugerindo com base no uso do cliente
 6. Pergunte sobre impressão, número de cores e logo (isso precisa vir ANTES da quantidade, pois o pedido mínimo depende de ter ou não impressão)
@@ -440,6 +550,21 @@ def webhook():
         dados_preco_txt = ""
         calc_resultado = None
         pedido = extrair_pedido(hist_txt, mensagem)
+
+        # Assim que soubermos produto+tamanho+cores, corrigimos largura/altura para valores
+        # que realmente têm cilindro de impressão disponível (a calculadora faz isso automaticamente).
+        if pedido.get("produto") and pedido.get("largura") is not None and pedido.get("altura") is not None and pedido.get("cores_n") is not None:
+            try:
+                nova_l, nova_a, ajustes_tamanho = ajustar_tamanho(
+                    pedido["produto"], pedido["largura"], pedido["altura"], pedido["cores_n"]
+                )
+                if ajustes_tamanho:
+                    pedido["largura"], pedido["altura"] = nova_l, nova_a
+                    dados_preco_txt += "\n\nAJUSTE DE TAMANHO (informe isso ao cliente com transparência): " + "; ".join(ajustes_tamanho) + ".\n"
+                else:
+                    pedido["largura"], pedido["altura"] = nova_l, nova_a
+            except Exception as e:
+                print(f"Erro ao ajustar tamanho: {e}")
 
         # Assim que já soubermos produto+tamanho+espessura+cores, calculamos o MÍNIMO REAL
         # dessa combinação (não é fixo em 30 mil - varia por peso) para o robô já informar certo.
