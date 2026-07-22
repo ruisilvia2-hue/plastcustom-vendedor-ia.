@@ -11,7 +11,8 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 EVOLUTION_URL = os.environ["EVOLUTION_API_URL"]
 EVOLUTION_KEY = os.environ["EVOLUTION_API_KEY"]
 PROPRIETARIO = os.environ["PROPRIETARIO_TELEFONE"]
-CONSULTOR_TELEFONE = "41985264979"  # recebe o resumo automático quando um pedido é fechado
+CONSULTOR_TELEFONE = os.environ["CONSULTOR_TELEFONE"]  # recebe o resumo automático quando um pedido é fechado
+WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"]  # segredo compartilhado com o n8n para autenticar o /webhook
 
 # ============================================================
 # TABELA DE PREÇOS OFICIAL — portada da calculadora HTML da Plastcustom
@@ -244,7 +245,7 @@ CONDIÇÕES:
 - Pedido mínimo: NÃO é um número fixo — varia por produto, tamanho e espessura (é sempre baseado em peso:
   100kg sem impressão / 150kg com impressão). Quando o contexto trouxer "PEDIDO MÍNIMO PARA ESTA COMBINAÇÃO",
   use EXATAMENTE esse valor em mil unidades. NUNCA diga "30 mil" de forma genérica — cada combinação tem seu próprio mínimo.
-- Prazo: 10 a 20 dias úteis após aprovação da arte
+- Prazo: 30 a 40 dias úteis após aprovação da arte
 - Frete: FOB Curitiba-PR ou CIF negociado
 - Pagamento: 28 dias ou 28/56 dias
 - Validade da proposta: 7 dias
@@ -410,9 +411,15 @@ def notificar_pedido_fechado(cliente, conversa_id, pedido, calc):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    # Autenticação: só aceita chamadas que tragam o segredo combinado com o n8n.
+    # Sem isso, qualquer pessoa na internet que descobrisse esse endereço poderia
+    # gastar seus créditos de IA e mandar mensagens em nome do robô.
+    if request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
+        return jsonify({"erro": "não autorizado"}), 401
+
     data = request.get_json()
     telefone_raw = data.get("telefone","").strip()
-    mensagem = data.get("mensagem","").strip()
+    mensagem = data.get("mensagem","").strip()[:2000]  # limite defensivo contra payloads abusivos
     instance = data.get("instance","automacao")
     if not telefone_raw or not mensagem:
         return jsonify({"erro": "dados incompletos"}), 400
