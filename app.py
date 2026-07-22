@@ -1,4 +1,4 @@
-import os, re
+import os, re, json
 import anthropic
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -12,6 +12,170 @@ EVOLUTION_URL = os.environ["EVOLUTION_API_URL"]
 EVOLUTION_KEY = os.environ["EVOLUTION_API_KEY"]
 PROPRIETARIO = os.environ["PROPRIETARIO_TELEFONE"]
 
+# ============================================================
+# TABELA DE PREÇOS OFICIAL — portada da calculadora HTML da Plastcustom
+# (Plastcustom_Orcamento.html — atualizada em 23/06/2026)
+# Faixas: v1 = 150-200kg | v2 = 210-400kg | v3 = 410kg ou +
+# ============================================================
+TABELA = [
+    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 36.66, "v2": 36.01, "v3": 34.71},
+    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 37.83, "v2": 37.31, "v3": 36.01},
+    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 39.13, "v2": 38.48, "v3": 37.31},
+    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 40.95, "v2": 40.30, "v3": 39.78},
+
+    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 39.78, "v2": 39.13, "v3": 37.96},
+    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 40.95, "v2": 40.43, "v3": 39.13},
+    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 42.25, "v2": 41.60, "v3": 40.43},
+    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 44.07, "v2": 43.55, "v3": 42.90},
+
+    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 33.15, "v2": 32.50, "v3": 31.20},
+    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 34.58, "v2": 33.80, "v3": 32.50},
+    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 35.23, "v2": 34.58, "v3": 33.15},
+    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 37.18, "v2": 36.53, "v3": 35.88},
+
+    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 26.13, "v2": 26.13, "v3": 26.13},
+    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 27.43, "v2": 27.43, "v3": 27.43},
+    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 28.08, "v2": 28.08, "v3": 28.08},
+    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 30.03, "v2": 30.03, "v3": 30.03},
+]
+
+PRECOS_PP = {
+    "com_nf": [
+        {"ate": 200,   "frente2": 30.00, "frente3": 31.50, "verso2": 32.00, "verso3": 33.50},
+        {"ate": 400,   "frente2": 29.50, "frente3": 31.00, "verso2": 31.50, "verso3": 33.00},
+        {"ate": 99999, "frente2": 28.50, "frente3": 30.00, "verso2": 30.50, "verso3": 32.00},
+    ],
+    "sem_nf": [
+        {"ate": 200,   "frente2": 27.30, "frente3": 28.70, "verso2": 29.12, "verso3": 30.49},
+        {"ate": 400,   "frente2": 26.85, "frente3": 28.21, "verso2": 28.67, "verso3": 30.03},
+        {"ate": 99999, "frente2": 25.94, "frente3": 27.30, "verso2": 27.76, "verso3": 29.12},
+    ]
+}
+
+MATERIAIS_VALIDOS = ["Virgem BD", "Virgem AD", "Reciclado Cor", "Reciclado Sem Cor", "Polipropileno (PP)"]
+PRODUTOS_VALIDOS = ["Sacola Camiseta", "Sacola Vazada", "Saco Impresso Solda Fundo", "Saco com Aba"]
+ESPESSURAS_VALIDAS = [0.020, 0.025, 0.028, 0.030, 0.035, 0.040, 0.050, 0.060, 0.070,
+                       0.080, 0.090, 0.100, 0.120, 0.140, 0.160, 0.180, 0.200]
+
+def espessura_mais_proxima(valor):
+    """Ajusta qualquer valor informado para a opção oficial de espessura mais próxima."""
+    try:
+        v = float(valor)
+    except (TypeError, ValueError):
+        return 0.028
+    return min(ESPESSURAS_VALIDAS, key=lambda x: abs(x - v))
+
+def lookup_pp(imp, cores_faixa, kg, tipo_nota):
+    tabela = PRECOS_PP.get(tipo_nota, PRECOS_PP["com_nf"])
+    faixa = next((f for f in tabela if kg <= f["ate"]), tabela[-1])
+    frente_verso = "VERSO" in imp
+    ate2 = cores_faixa != "3 ou + cores"
+    if frente_verso:
+        return faixa["verso2"] if ate2 else faixa["verso3"]
+    return faixa["frente2"] if ate2 else faixa["frente3"]
+
+def lookup_fator_kg(material, imp, cores_faixa, kg, tipo_nota="com_nf"):
+    if material == "Polipropileno (PP)":
+        return lookup_pp(imp, cores_faixa, kg, tipo_nota)
+    row = next((r for r in TABELA if r["m"] == material and r["i"] == imp and r["c"] == cores_faixa), None)
+    if not row:
+        return 0
+    fator_base = row["v1"] if kg <= 200 else (row["v2"] if kg <= 400 else row["v3"])
+    return round(fator_base * 0.91, 2) if tipo_nota == "sem_nf" else fator_base
+
+def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, espessura=0.028, tipo_nota="com_nf"):
+    """
+    Calcula o preço EXATO seguindo a mesma lógica da calculadora oficial da Plastcustom.
+    Não inclui clichê (cobrado à parte, conforme já informado pelo robô ao cliente).
+    """
+    L = float(largura)
+    A = float(altura)
+    E = float(espessura)
+    MILH = float(milheiros)
+    cores_n = int(cores_n)
+
+    area = L * A
+    vol = area * E
+    p_un_g = vol            # peso por unidade (g) — mesma fórmula da calculadora
+    p_mil_kg = p_un_g       # "peso do milheiro" no sentido usado pela calculadora
+    total_kg = p_mil_kg * MILH
+
+    cores_faixa = "até 2 cores" if cores_n <= 2 else "3 ou + cores"
+    preco_kg = lookup_fator_kg(material, imp, cores_faixa, total_kg, tipo_nota)
+
+    if preco_kg <= 0:
+        raise ValueError(f"Combinação sem preço na tabela: {material} / {imp} / {cores_faixa}")
+
+    # Sem impressão: desconto de R$2 no fator kg (regra da calculadora), exceto PP
+    if cores_n == 0 and material != "Polipropileno (PP)":
+        preco_kg -= 2
+
+    mil_base = preco_kg * p_mil_kg
+
+    # Regra: milheiro < 1,5kg soma R$3,00 no fator kg
+    adicional_fator_kg = 3 if 0 < p_mil_kg < 1.5 else 0
+    adicional_mil = adicional_fator_kg * p_mil_kg
+
+    mil = mil_base + adicional_mil
+    unitario = mil / 1000
+    total = mil * MILH
+
+    pedido_min_kg = 100 if cores_n == 0 else 150
+
+    return {
+        "preco_kg": round(preco_kg, 2),
+        "unitario": round(unitario, 4),
+        "milheiro": round(mil, 2),
+        "total": round(total, 2),
+        "peso_total_kg": round(total_kg, 2),
+        "pedido_minimo_kg": pedido_min_kg,
+        "atende_minimo": total_kg >= pedido_min_kg,
+    }
+
+def extrair_pedido(hist_txt, mensagem_atual):
+    """Usa a IA apenas para EXTRAIR dados estruturados da conversa (não para calcular preço)."""
+    lista_esp = ", ".join(f"{e:.3f}".replace(".", ",") for e in ESPESSURAS_VALIDAS)
+    prompt_extracao = f"""Baseado nesta conversa entre um vendedor e um cliente, extraia os dados do pedido.
+Responda APENAS com um JSON válido, sem texto antes ou depois, sem markdown.
+
+Conversa:
+{hist_txt}
+Cliente (última mensagem): {mensagem_atual}
+
+Formato exato de resposta:
+{{
+  "produto": "Sacola Camiseta" ou "Sacola Vazada" ou "Saco Impresso Solda Fundo" ou "Saco com Aba" ou null,
+  "material": "Virgem BD" ou "Virgem AD" ou "Reciclado Cor" ou "Reciclado Sem Cor" ou "Polipropileno (PP)" ou null,
+  "largura": numero ou null,
+  "altura": numero ou null,
+  "espessura": numero ou null,
+  "cores_n": numero ou null,
+  "impressao": "FRENTE" ou "FRENTE_VERSO" ou null,
+  "milheiros": numero ou null,
+  "completo": true ou false
+}}
+
+Regras:
+- "material": se o cliente não mencionou, use "Virgem BD" (é o padrão da empresa)
+- "espessura": opções oficiais em mm são: {lista_esp}. Extraia o valor que o cliente escolheu (aceite tanto "0,028" quanto "28 mícras"/"28 micra" como o mesmo valor 0,028). Se não foi perguntado/respondido ainda, deixe null.
+- "cores_n": use 0 se o cliente disse que não quer impressão/logo; use o número de cores se ele informou
+- "impressao": "FRENTE" se nada foi dito sobre frente e verso
+- "largura"/"altura": converta o tamanho informado (ex: "40x50") em dois números
+- "completo": true SOMENTE se produto, largura, altura, espessura, cores_n e milheiros estiverem TODOS preenchidos (não nulos)
+"""
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt_extracao}]
+        )
+        texto = response.content[0].text.strip()
+        texto = re.sub(r'^```json\s*|\s*```$', '', texto).strip()
+        return json.loads(texto)
+    except Exception as e:
+        print(f"Erro ao extrair pedido: {e}")
+        return {"completo": False}
+
 SYSTEM_PROMPT = """Você é o Rui, vendedor de alta performance da Plastcustom. Conhece cada detalhe dos produtos e fecha vendas com naturalidade. Nunca mencione catálogo, sistema ou virtual.
 
 PRODUTOS:
@@ -22,13 +186,26 @@ PRODUTOS:
 
 TAMANHOS: 30x40 / 40x50 / 50x60 / 60x80 / 80x100 cm
 MATERIAIS: Virgem BD (padrão) / Virgem AD (resistente) / PP (transparente) / Reciclado
+ESPESSURAS DISPONÍVEIS (mm): 0,020 / 0,025 / 0,028 / 0,030 / 0,035 / 0,040 / 0,050 / 0,060 / 0,070 / 0,080 / 0,090 / 0,100 / 0,120 / 0,140 / 0,160 / 0,180 / 0,200
+  - Se o cliente não souber qual escolher, explique rapidamente: quanto maior o número, mais grossa/resistente a sacola. 0,028mm é a espessura padrão mais usada para o dia a dia; acima de 0,060mm já é considerado reforçado/industrial.
 IMPRESSÃO: até 6 cores, frente e/ou verso. Clichê cobrado à parte na primeira compra.
 
-PREÇOS (R$ por MIL unidades):
-Sacola Camiseta 40x50 Virgem BD: sem impressão R$580 / 1 cor R$680 / 2 cores R$780
-Sacola Camiseta 50x60 Virgem BD: sem impressão R$760 / 1 cor R$860 / 2 cores R$960
-Saco Impresso 30x40 Virgem AD: 1 cor R$980 / 2 cores frente+verso R$1.100
-Para outros tamanhos calcule proporcionalmente e informe com confiança.
+COMO APRESENTAR AS OPÇÕES — MUITO IMPORTANTE:
+- Sempre que for perguntar produto, material, tamanho, espessura ou número de cores, apresente as opções
+  em formato de lista curta (menu), para o cliente só escolher — não faça pergunta totalmente aberta.
+  Exemplo de tom: "Qual espessura você precisa?\n0,020mm (mais fina) / 0,028mm (padrão) / 0,040mm (reforçada) / 0,060mm (industrial)... me diz o que combina melhor com o uso, que eu te ajudo a escolher."
+- Você não precisa listar as 17 espessuras inteiras toda vez; pode agrupar em 3-4 faixas (fina/padrão/reforçada/industrial)
+  citando um exemplo de valor de cada faixa, e perguntar o uso do cliente para sugerir a mais indicada.
+
+REGRA DE PREÇO — MUITO IMPORTANTE:
+- Você NUNCA calcula ou estima preço por conta própria, nem "proporcionalmente".
+- Quando o contexto desta mensagem trouxer um bloco "DADOS CALCULADOS OFICIAIS", use EXATAMENTE
+  esses valores na sua resposta (não arredonde diferente, não invente outro número).
+- Se esse bloco não estiver presente e o cliente perguntar o preço, NÃO informe nenhum valor.
+  Diga que precisa confirmar mais alguns detalhes (produto, tamanho, quantidade em mil, impressão)
+  antes de calcular certinho.
+- Se aparecer um aviso de erro no cálculo, diga que vai confirmar o valor exato com a equipe e
+  retornar em breve — nunca invente um número nessa situação.
 
 CONDIÇÕES:
 - Pedido mínimo: 30 mil unidades
@@ -39,13 +216,14 @@ CONDIÇÕES:
 
 FLUXO DE VENDA:
 1. Cumprimente e pergunte o tipo de negócio
-2. Pergunte qual produto precisa
-3. Pergunte o tamanho
-4. Pergunte a quantidade em MIL unidades
-5. Pergunte sobre impressão e logo
-6. Calcule e apresente o preço com confiança
-7. Feche: Posso gerar a proposta para você?
-8. Quando confirmar diga: Perfeito! Estou passando seus dados para nosso consultor finalizar. Em breve entrarão em contato!
+2. Pergunte qual produto precisa (apresente as opções)
+3. Pergunte o tamanho (apresente as opções)
+4. Pergunte a espessura, explicando as faixas e sugerindo com base no uso do cliente
+5. Pergunte a quantidade em MIL unidades
+6. Pergunte sobre impressão, número de cores e logo
+7. Quando tiver os DADOS CALCULADOS OFICIAIS, apresente o preço com confiança
+8. Feche: Posso gerar a proposta para você?
+9. Quando confirmar diga: Perfeito! Estou passando seus dados para nosso consultor finalizar. Em breve entrarão em contato!
 
 OBJEÇÕES:
 - Tá caro: mostre custo por unidade e sugira quantidade maior
@@ -54,7 +232,6 @@ OBJEÇÕES:
 
 REGRAS:
 - Uma pergunta por vez
-- Quando tiver produto+tamanho+quantidade+impressão calcule e apresente o preço
 - Máximo 3 parágrafos
 - Tom confiante direto e profissional"""
 
@@ -139,9 +316,14 @@ def calcular_score(conversa_id, cliente_id):
     return {"score": score, "categoria": categoria}
 
 def enviar_whatsapp(telefone, mensagem, instance="automacao"):
+    """
+    Usado SOMENTE para notificar o proprietário sobre leads quentes.
+    A resposta ao cliente é enviada pelo n8n (não duplicar aqui).
+    """
     url = f"{EVOLUTION_URL}/message/sendText/{instance}"
     headers = {"Content-Type": "application/json", "apikey": EVOLUTION_KEY}
-    payload = {"number": telefone, "options": {"delay": 1500, "presence": "composing"}, "textMessage": {"text": mensagem}}
+    # formato correto da Evolution API v2: "number" e "text" no nível raiz
+    payload = {"number": telefone, "text": mensagem}
     print(f"Enviando para {telefone} via {instance}")
     print(f"URL: {url}")
     try:
@@ -176,12 +358,46 @@ def webhook():
         salvar_mensagem(conversa["id"], "cliente", mensagem)
         historico = obter_historico(conversa["id"])
         hist_txt = "\n".join([f"{'Cliente' if m['remetente']=='cliente' else 'Rui'}: {m['conteudo']}" for m in historico[:-1]])
-        prompt = f"Historico:\n{hist_txt}\n\nCliente: {mensagem}\nRui:"
+
+        # === NOVO: extrai os dados do pedido e calcula o preço EXATO (sem achismo) ===
+        dados_preco_txt = ""
+        pedido = extrair_pedido(hist_txt, mensagem)
+        if pedido.get("completo"):
+            try:
+                imp_map = "IMPRESSÃO FRENTE / VERSO" if pedido.get("impressao") == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
+                material = pedido.get("material") or "Virgem BD"
+                espessura = espessura_mais_proxima(pedido.get("espessura"))
+                calc = calcular_preco(
+                    produto=pedido["produto"],
+                    material=material,
+                    largura=pedido["largura"],
+                    altura=pedido["altura"],
+                    cores_n=pedido["cores_n"],
+                    imp=imp_map,
+                    milheiros=pedido["milheiros"],
+                    espessura=espessura,
+                )
+                dados_preco_txt = f"""
+
+DADOS CALCULADOS OFICIAIS (use EXATAMENTE estes valores, não calcule nada por conta própria):
+Produto: {pedido['produto']} {pedido['largura']}x{pedido['altura']}cm, {material}, espessura {espessura:.3f}mm, {pedido['cores_n']} cores, {imp_map}
+Preço por milheiro: R$ {calc['milheiro']}
+Total ({pedido['milheiros']} mil unidades): R$ {calc['total']}
+Peso total do pedido: {calc['peso_total_kg']} kg (mínimo exigido: {calc['pedido_minimo_kg']} kg)
+"""
+                if not calc["atende_minimo"]:
+                    dados_preco_txt += "\nATENÇÃO: peso abaixo do mínimo exigido. Explique ao cliente que não é possível fechar nesse peso e sugira aumentar a quantidade.\n"
+            except Exception as e:
+                print(f"Erro ao calcular preço: {e}")
+                dados_preco_txt = "\n\nAVISO: não foi possível calcular o preço automaticamente para esta combinação. NÃO informe nenhum valor - diga que vai confirmar com a equipe e retornar em breve.\n"
+
+        prompt = f"Historico:\n{hist_txt}{dados_preco_txt}\n\nCliente: {mensagem}\nRui:"
         response = client.messages.create(model="claude-sonnet-4-6", max_tokens=600, system=SYSTEM_PROMPT, messages=[{"role":"user","content":prompt}])
         resposta = response.content[0].text.strip()
         salvar_mensagem(conversa["id"], "ia", resposta)
         lead = calcular_score(conversa["id"], cliente["id"])
-        enviar_whatsapp(telefone_raw, resposta, instance)
+        # NOTA: o envio da mensagem ao cliente é feito pelo n8n (HTTP Request1),
+        # por isso NÃO chamamos enviar_whatsapp() aqui para o cliente (evita duplicar).
         if lead["score"] >= 80:
             notificar_proprietario(cliente, lead["score"], conversa["id"])
         return jsonify({"ok": True, "resposta": resposta, "score": lead["score"], "categoria": lead["categoria"]})
