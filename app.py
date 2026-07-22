@@ -182,7 +182,8 @@ Formato exato de resposta:
   "cores_n": numero ou null,
   "impressao": "FRENTE" ou "FRENTE_VERSO" ou null,
   "milheiros": numero ou null,
-  "completo": true ou false
+  "completo": true ou false,
+  "confirmou": true ou false
 }}
 
 Regras:
@@ -194,6 +195,11 @@ Regras:
 - "impressao": "FRENTE" se nada foi dito sobre frente e verso
 - "largura"/"altura": converta o tamanho informado (ex: "40x50") em dois números
 - "completo": true SOMENTE se produto, largura, altura, espessura, cores_n e milheiros estiverem TODOS preenchidos (não nulos)
+- "confirmou": true SOMENTE se a ÚLTIMA mensagem do cliente (não mensagens antigas) for uma resposta afirmativa
+  clara a um fechamento de pedido/proposta (ex: "sim", "sim pode", "pode gerar", "confirmo", "fechado", "quero",
+  "isso mesmo", "vamos fechar"). Considere o contexto: só é confirmação se o vendedor tinha acabado de perguntar
+  algo como "Posso gerar a proposta?" ou similar. Uma resposta afirmativa em outro contexto (ex: confirmando
+  só o tamanho ou a espessura) NÃO conta como "confirmou". Na dúvida, use false.
 """
     try:
         response = client.messages.create(
@@ -492,9 +498,9 @@ Peso total do pedido: {calc['peso_total_kg']} kg (mínimo exigido: {calc['pedido
         if lead["score"] >= 80:
             notificar_proprietario(cliente, lead["score"], conversa["id"])
 
-        # Pedido fechado: cliente confirmou e já temos o cálculo oficial -> avisa o consultor
-        palavras_confirmacao = SINAIS["confirmou_pedido"][0]
-        if calc_resultado and any(p in mensagem.lower() for p in palavras_confirmacao):
+        # Pedido fechado: cliente confirmou (segundo a própria IA, não busca frágil de palavras-chave)
+        # e já temos o cálculo oficial -> avisa o consultor
+        if calc_resultado and pedido.get("confirmou"):
             notificar_pedido_fechado(cliente, conversa["id"], pedido, calc_resultado)
 
         return jsonify({"ok": True, "resposta": resposta, "score": lead["score"], "categoria": lead["categoria"]})
