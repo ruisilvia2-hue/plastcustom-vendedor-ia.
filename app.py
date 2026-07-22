@@ -1,4 +1,4 @@
-import os, re, json
+import os, re, json, math
 import anthropic
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -90,6 +90,21 @@ def lookup_fator_kg(material, imp, cores_faixa, kg, tipo_nota="com_nf"):
     fator_base = row["v1"] if kg <= 200 else (row["v2"] if kg <= 400 else row["v3"])
     return round(fator_base * 0.91, 2) if tipo_nota == "sem_nf" else fator_base
 
+def calcular_pedido_minimo(largura, altura, espessura, cores_n):
+    """Pedido mínimo real: 150kg com impressão / 100kg sem impressão, convertido em milheiros
+    de acordo com o peso de CADA combinação de tamanho+espessura (não é um número fixo)."""
+    L = float(largura); A = float(altura); E = float(espessura)
+    p_mil_kg = L * A * E
+    if p_mil_kg <= 0:
+        return None
+    pedido_min_kg = 100 if int(cores_n) == 0 else 150
+    unidades_min = math.ceil((pedido_min_kg / p_mil_kg) * 1000 / 500) * 500
+    return {
+        "milheiros_min": unidades_min / 1000,
+        "unidades_min": unidades_min,
+        "kg_min": pedido_min_kg,
+    }
+
 def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, espessura=0.028, tipo_nota="com_nf"):
     """
     Calcula o preço EXATO seguindo a mesma lógica da calculadora oficial da Plastcustom.
@@ -128,6 +143,7 @@ def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, 
     total = mil * MILH
 
     pedido_min_kg = 100 if cores_n == 0 else 150
+    minimo = calcular_pedido_minimo(L, A, E, cores_n)
 
     return {
         "preco_kg": round(preco_kg, 2),
@@ -136,6 +152,7 @@ def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, 
         "total": round(total, 2),
         "peso_total_kg": round(total_kg, 2),
         "pedido_minimo_kg": pedido_min_kg,
+        "pedido_minimo_milheiros": minimo["milheiros_min"] if minimo else None,
         "atende_minimo": total_kg >= pedido_min_kg,
     }
 
@@ -222,7 +239,9 @@ REGRA DE PREÇO — MUITO IMPORTANTE:
   retornar em breve — nunca invente um número nessa situação.
 
 CONDIÇÕES:
-- Pedido mínimo: 30 mil unidades
+- Pedido mínimo: NÃO é um número fixo — varia por produto, tamanho e espessura (é sempre baseado em peso:
+  100kg sem impressão / 150kg com impressão). Quando o contexto trouxer "PEDIDO MÍNIMO PARA ESTA COMBINAÇÃO",
+  use EXATAMENTE esse valor em mil unidades. NUNCA diga "30 mil" de forma genérica — cada combinação tem seu próprio mínimo.
 - Prazo: 10 a 20 dias úteis após aprovação da arte
 - Frete: FOB Curitiba-PR ou CIF negociado
 - Pagamento: 28 dias ou 28/56 dias
@@ -232,12 +251,13 @@ FLUXO DE VENDA:
 1. Cumprimente e pergunte o tipo de negócio
 2. Pergunte qual produto precisa (apresente as opções)
 3. Pergunte o tamanho (apresente as opções)
-4. Pergunte a espessura, explicando as faixas e sugerindo com base no uso do cliente
-5. Pergunte a quantidade em MIL unidades
-6. Pergunte sobre impressão, número de cores e logo
-7. Quando tiver os DADOS CALCULADOS OFICIAIS, apresente o preço com confiança
-8. Feche: Posso gerar a proposta para você?
-9. Quando confirmar diga: Perfeito! Estou passando seus dados para nosso consultor finalizar. Em breve entrarão em contato!
+4. Pergunte o material (apresente as opções: Virgem BD - padrão / Virgem AD - resistente / PP - transparente / Reciclado)
+5. Pergunte a espessura, usando a lista específica do produto já escolhido, explicando as faixas e sugerindo com base no uso do cliente
+6. Pergunte a quantidade em MIL unidades — quando o contexto trouxer o pedido mínimo calculado para essa combinação, informe esse valor específico (nunca um número fixo genérico)
+7. Pergunte sobre impressão, número de cores e logo
+8. Quando tiver os DADOS CALCULADOS OFICIAIS, apresente o preço com confiança
+9. Feche: Posso gerar a proposta para você?
+10. Quando confirmar diga: Perfeito! Estou passando seus dados para nosso consultor finalizar. Em breve entrarão em contato!
 
 OBJEÇÕES:
 - Tá caro: mostre custo por unidade e sugira quantidade maior
@@ -376,6 +396,23 @@ def webhook():
         # === NOVO: extrai os dados do pedido e calcula o preço EXATO (sem achismo) ===
         dados_preco_txt = ""
         pedido = extrair_pedido(hist_txt, mensagem)
+
+        # Assim que já soubermos produto+tamanho+espessura+cores, calculamos o MÍNIMO REAL
+        # dessa combinação (não é fixo em 30 mil - varia por peso) para o robô já informar certo.
+        campos_base = ["produto", "largura", "altura", "espessura", "cores_n"]
+        if all(pedido.get(c) is not None for c in campos_base):
+            try:
+                espessura_base = espessura_mais_proxima(pedido.get("espessura"), pedido.get("produto"))
+                minimo = calcular_pedido_minimo(pedido["largura"], pedido["altura"], espessura_base, pedido["cores_n"])
+                if minimo:
+                    dados_preco_txt += f"""
+
+PEDIDO MÍNIMO PARA ESTA COMBINAÇÃO (produto/tamanho/espessura já escolhidos): {minimo['milheiros_min']:.1f} mil unidades ({minimo['kg_min']} kg mínimo).
+NÃO diga "30 mil" de forma genérica - use exatamente este valor específico.
+"""
+            except Exception as e:
+                print(f"Erro ao calcular pedido mínimo: {e}")
+
         if pedido.get("completo"):
             try:
                 imp_map = "IMPRESSÃO FRENTE / VERSO" if pedido.get("impressao") == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
@@ -391,7 +428,7 @@ def webhook():
                     milheiros=pedido["milheiros"],
                     espessura=espessura,
                 )
-                dados_preco_txt = f"""
+                dados_preco_txt += f"""
 
 DADOS CALCULADOS OFICIAIS (use EXATAMENTE estes valores, não calcule nada por conta própria):
 Produto: {pedido['produto']} {pedido['largura']}x{pedido['altura']}cm, {material}, espessura {espessura:.3f}mm, {pedido['cores_n']} cores, {imp_map}
