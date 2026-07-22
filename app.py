@@ -54,16 +54,23 @@ PRECOS_PP = {
 
 MATERIAIS_VALIDOS = ["Virgem BD", "Virgem AD", "Reciclado Cor", "Reciclado Sem Cor", "Polipropileno (PP)"]
 PRODUTOS_VALIDOS = ["Sacola Camiseta", "Sacola Vazada", "Saco Impresso Solda Fundo", "Saco com Aba"]
-ESPESSURAS_VALIDAS = [0.020, 0.025, 0.028, 0.030, 0.035, 0.040, 0.050, 0.060, 0.070,
-                       0.080, 0.090, 0.100, 0.120, 0.140, 0.160, 0.180, 0.200]
 
-def espessura_mais_proxima(valor):
-    """Ajusta qualquer valor informado para a opção oficial de espessura mais próxima."""
+# Espessuras oficiais por produto (mm) — cada produto tem sua própria faixa
+ESPESSURAS_POR_PRODUTO = {
+    "Sacola Camiseta": [0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.028, 0.035, 0.045],
+    "Sacola Vazada": [0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.010, 0.011, 0.012, 0.013, 0.014, 0.045],
+    "Saco Impresso Solda Fundo": [0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.010, 0.011, 0.012, 0.013, 0.014, 0.045],
+    "Saco com Aba": [0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.010, 0.011, 0.012, 0.013, 0.014, 0.045],
+}
+
+def espessura_mais_proxima(valor, produto=None):
+    """Ajusta qualquer valor informado para a opção oficial mais próxima DENTRO do produto escolhido."""
+    opcoes = ESPESSURAS_POR_PRODUTO.get(produto) or sorted({e for lst in ESPESSURAS_POR_PRODUTO.values() for e in lst})
     try:
         v = float(valor)
     except (TypeError, ValueError):
-        return 0.028
-    return min(ESPESSURAS_VALIDAS, key=lambda x: abs(x - v))
+        return opcoes[0]
+    return min(opcoes, key=lambda x: abs(x - v))
 
 def lookup_pp(imp, cores_faixa, kg, tipo_nota):
     tabela = PRECOS_PP.get(tipo_nota, PRECOS_PP["com_nf"])
@@ -134,7 +141,10 @@ def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, 
 
 def extrair_pedido(hist_txt, mensagem_atual):
     """Usa a IA apenas para EXTRAIR dados estruturados da conversa (não para calcular preço)."""
-    lista_esp = ", ".join(f"{e:.3f}".replace(".", ",") for e in ESPESSURAS_VALIDAS)
+    tabela_esp_txt = "\n".join(
+        f"  {produto}: " + ", ".join(f"{e:.3f}".replace(".", ",") for e in lista)
+        for produto, lista in ESPESSURAS_POR_PRODUTO.items()
+    )
     prompt_extracao = f"""Baseado nesta conversa entre um vendedor e um cliente, extraia os dados do pedido.
 Responda APENAS com um JSON válido, sem texto antes ou depois, sem markdown.
 
@@ -157,7 +167,9 @@ Formato exato de resposta:
 
 Regras:
 - "material": se o cliente não mencionou, use "Virgem BD" (é o padrão da empresa)
-- "espessura": opções oficiais em mm são: {lista_esp}. Extraia o valor que o cliente escolheu (aceite tanto "0,028" quanto "28 mícras"/"28 micra" como o mesmo valor 0,028). Se não foi perguntado/respondido ainda, deixe null.
+- "espessura": cada produto tem sua PRÓPRIA lista de espessuras oficiais (em mm):
+{tabela_esp_txt}
+  Extraia o valor que o cliente escolheu, considerando a lista do produto já identificado. Se não foi perguntado/respondido ainda, deixe null.
 - "cores_n": use 0 se o cliente disse que não quer impressão/logo; use o número de cores se ele informou
 - "impressao": "FRENTE" se nada foi dito sobre frente e verso
 - "largura"/"altura": converta o tamanho informado (ex: "40x50") em dois números
@@ -186,16 +198,18 @@ PRODUTOS:
 
 TAMANHOS: 30x40 / 40x50 / 50x60 / 60x80 / 80x100 cm
 MATERIAIS: Virgem BD (padrão) / Virgem AD (resistente) / PP (transparente) / Reciclado
-ESPESSURAS DISPONÍVEIS (mm): 0,020 / 0,025 / 0,028 / 0,030 / 0,035 / 0,040 / 0,050 / 0,060 / 0,070 / 0,080 / 0,090 / 0,100 / 0,120 / 0,140 / 0,160 / 0,180 / 0,200
-  - Se o cliente não souber qual escolher, explique rapidamente: quanto maior o número, mais grossa/resistente a sacola. 0,028mm é a espessura padrão mais usada para o dia a dia; acima de 0,060mm já é considerado reforçado/industrial.
+ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa, pergunte a espessura SOMENTE depois de saber o produto:
+  - Sacola Camiseta: 0,003 / 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,028 / 0,035 / 0,045
+  - Sacola Vazada, Saco Impresso Solda Fundo, Saco com Aba: 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,010 / 0,011 / 0,012 / 0,013 / 0,014 / 0,045
+  - Se o cliente não souber qual escolher, explique rapidamente: quanto maior o número, mais grossa/resistente a sacola.
 IMPRESSÃO: até 6 cores, frente e/ou verso. Clichê cobrado à parte na primeira compra.
 
 COMO APRESENTAR AS OPÇÕES — MUITO IMPORTANTE:
 - Sempre que for perguntar produto, material, tamanho, espessura ou número de cores, apresente as opções
   em formato de lista curta (menu), para o cliente só escolher — não faça pergunta totalmente aberta.
-  Exemplo de tom: "Qual espessura você precisa?\n0,020mm (mais fina) / 0,028mm (padrão) / 0,040mm (reforçada) / 0,060mm (industrial)... me diz o que combina melhor com o uso, que eu te ajudo a escolher."
-- Você não precisa listar as 17 espessuras inteiras toda vez; pode agrupar em 3-4 faixas (fina/padrão/reforçada/industrial)
-  citando um exemplo de valor de cada faixa, e perguntar o uso do cliente para sugerir a mais indicada.
+- Ao perguntar a espessura, use APENAS a lista de espessuras do produto que o cliente já escolheu (nunca ofereça
+  um valor que não esteja na lista daquele produto específico). Se o cliente pedir um valor fora da lista,
+  explique que não está disponível para aquele produto e mostre de novo as opções válidas dele.
 
 REGRA DE PREÇO — MUITO IMPORTANTE:
 - Você NUNCA calcula ou estima preço por conta própria, nem "proporcionalmente".
@@ -366,7 +380,7 @@ def webhook():
             try:
                 imp_map = "IMPRESSÃO FRENTE / VERSO" if pedido.get("impressao") == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
                 material = pedido.get("material") or "Virgem BD"
-                espessura = espessura_mais_proxima(pedido.get("espessura"))
+                espessura = espessura_mais_proxima(pedido.get("espessura"), pedido.get("produto"))
                 calc = calcular_preco(
                     produto=pedido["produto"],
                     material=material,
