@@ -11,6 +11,7 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 EVOLUTION_URL = os.environ["EVOLUTION_API_URL"]
 EVOLUTION_KEY = os.environ["EVOLUTION_API_KEY"]
 PROPRIETARIO = os.environ["PROPRIETARIO_TELEFONE"]
+CONSULTOR_TELEFONE = "41985264979"  # recebe o resumo automático quando um pedido é fechado
 
 # ============================================================
 # TABELA DE PREÇOS OFICIAL — portada da calculadora HTML da Plastcustom
@@ -151,6 +152,7 @@ def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, 
         "milheiro": round(mil, 2),
         "total": round(total, 2),
         "peso_total_kg": round(total_kg, 2),
+        "espessura_usada": round(E, 3),
         "pedido_minimo_kg": pedido_min_kg,
         "pedido_minimo_milheiros": minimo["milheiros_min"] if minimo else None,
         "atende_minimo": total_kg >= pedido_min_kg,
@@ -378,6 +380,34 @@ def notificar_proprietario(cliente, score, conversa_id):
     cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'lead_quente')", (cliente["id"], conversa_id))
     db.commit(); cur.close(); db.close()
 
+def notificar_pedido_fechado(cliente, conversa_id, pedido, calc):
+    """Envia o resumo do pedido para o CONSULTOR_TELEFONE assim que o cliente confirma o fechamento.
+    Só dispara uma vez por conversa (evita reenviar se o cliente confirmar de novo)."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT id FROM notificacoes WHERE conversa_id=%s AND tipo='pedido_fechado'", (conversa_id,))
+    if cur.fetchone():
+        cur.close(); db.close(); return
+    nome = cliente.get("nome") or cliente["telefone"]
+    imp_label = "frente e verso" if pedido.get("impressao") == "FRENTE_VERSO" else "frente"
+    material = pedido.get("material") or "Virgem BD"
+    msg = (
+        "PEDIDO FECHADO - PLASTCUSTOM\n\n"
+        f"Cliente: {nome}\n"
+        f"Telefone: +{cliente['telefone']}\n\n"
+        f"Produto: {pedido['produto']} {pedido['largura']}x{pedido['altura']}cm\n"
+        f"Material: {material}\n"
+        f"Espessura: {calc['espessura_usada']}mm\n"
+        f"Impressao: {pedido['cores_n']} cores, {imp_label}\n"
+        f"Quantidade: {pedido['milheiros']} mil unidades\n\n"
+        f"Preco por milheiro: R$ {calc['milheiro']}\n"
+        f"TOTAL: R$ {calc['total']}\n\n"
+        "Entre em contato para finalizar!"
+    )
+    enviar_whatsapp(CONSULTOR_TELEFONE, msg)
+    cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'pedido_fechado')", (cliente["id"], conversa_id))
+    db.commit(); cur.close(); db.close()
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
@@ -395,6 +425,7 @@ def webhook():
 
         # === NOVO: extrai os dados do pedido e calcula o preço EXATO (sem achismo) ===
         dados_preco_txt = ""
+        calc_resultado = None
         pedido = extrair_pedido(hist_txt, mensagem)
 
         # Assim que já soubermos produto+tamanho+espessura+cores, calculamos o MÍNIMO REAL
@@ -438,6 +469,8 @@ Peso total do pedido: {calc['peso_total_kg']} kg (mínimo exigido: {calc['pedido
 """
                 if not calc["atende_minimo"]:
                     dados_preco_txt += "\nATENÇÃO: peso abaixo do mínimo exigido. Explique ao cliente que não é possível fechar nesse peso e sugira aumentar a quantidade.\n"
+                else:
+                    calc_resultado = calc
             except Exception as e:
                 print(f"Erro ao calcular preço: {e}")
                 dados_preco_txt = "\n\nAVISO: não foi possível calcular o preço automaticamente para esta combinação. NÃO informe nenhum valor - diga que vai confirmar com a equipe e retornar em breve.\n"
@@ -451,6 +484,12 @@ Peso total do pedido: {calc['peso_total_kg']} kg (mínimo exigido: {calc['pedido
         # por isso NÃO chamamos enviar_whatsapp() aqui para o cliente (evita duplicar).
         if lead["score"] >= 80:
             notificar_proprietario(cliente, lead["score"], conversa["id"])
+
+        # Pedido fechado: cliente confirmou e já temos o cálculo oficial -> avisa o consultor
+        palavras_confirmacao = SINAIS["confirmou_pedido"][0]
+        if calc_resultado and any(p in mensagem.lower() for p in palavras_confirmacao):
+            notificar_pedido_fechado(cliente, conversa["id"], pedido, calc_resultado)
+
         return jsonify({"ok": True, "resposta": resposta, "score": lead["score"], "categoria": lead["categoria"]})
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
