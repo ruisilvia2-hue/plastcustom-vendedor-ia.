@@ -1,6 +1,7 @@
 import os, re, json, math
 import anthropic
 import psycopg2
+from psycopg2 import pool as pg_pool
 from psycopg2.extras import RealDictCursor
 import requests
 from flask import Flask, request, jsonify
@@ -8,6 +9,9 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
 DATABASE_URL = os.environ["DATABASE_URL"]
+# Pool de conexões: reaproveita conexões abertas em vez de criar uma nova a cada consulta.
+# min=1 conexão sempre pronta, max=10 conexões simultâneas por processo do servidor.
+DB_POOL = pg_pool.ThreadedConnectionPool(1, 10, dsn=DATABASE_URL)
 EVOLUTION_URL = os.environ["EVOLUTION_API_URL"]
 EVOLUTION_KEY = os.environ["EVOLUTION_API_KEY"]
 PROPRIETARIO = os.environ["PROPRIETARIO_TELEFONE"]
@@ -263,60 +267,126 @@ def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, 
         "atende_minimo": total_kg >= pedido_min_kg,
     }
 
-def extrair_pedido(hist_txt, mensagem_atual):
-    """Usa a IA apenas para EXTRAIR dados estruturados da conversa (não para calcular preço)."""
-    tabela_esp_txt = "\n".join(
-        f"  {produto}: " + ", ".join(f"{e:.3f}".replace(".", ",") for e in lista)
-        for produto, lista in ESPESSURAS_POR_PRODUTO.items()
-    )
-    prompt_extracao = f"""Baseado nesta conversa entre um vendedor e um cliente, extraia os dados do pedido.
-Responda APENAS com um JSON válido, sem texto antes ou depois, sem markdown.
-
-Conversa:
-{hist_txt}
-Cliente (última mensagem): {mensagem_atual}
-
-Formato exato de resposta:
-{{
-  "produto": "Sacola Camiseta" ou "Sacola Vazada" ou "Saco Impresso Solda Fundo" ou "Saco com Aba" ou null,
-  "material": "Virgem BD" ou "Virgem AD" ou "Reciclado Cor" ou "Reciclado Sem Cor" ou "Polipropileno (PP)" ou null,
-  "largura": numero ou null,
-  "altura": numero ou null,
-  "espessura": numero ou null,
-  "cores_n": numero ou null,
-  "impressao": "FRENTE" ou "FRENTE_VERSO" ou null,
-  "milheiros": numero ou null,
-  "completo": true ou false,
-  "confirmou": true ou false
-}}
-
-Regras:
-- "material": se o cliente não mencionou, use "Virgem BD" (é o padrão da empresa)
-- "espessura": cada produto tem sua PRÓPRIA lista de espessuras oficiais (em mm):
-{tabela_esp_txt}
-  Extraia o valor que o cliente escolheu, considerando a lista do produto já identificado. Se não foi perguntado/respondido ainda, deixe null.
-- "cores_n": use 0 se o cliente disse que não quer impressão/logo; use o número de cores se ele informou
-- "impressao": "FRENTE" se nada foi dito sobre frente e verso
-- "largura"/"altura": converta o tamanho informado (ex: "40x50") em dois números
-- "completo": true SOMENTE se produto, largura, altura, espessura, cores_n e milheiros estiverem TODOS preenchidos (não nulos)
-- "confirmou": true SOMENTE se a ÚLTIMA mensagem do cliente (não mensagens antigas) for uma resposta afirmativa
-  clara a um fechamento de pedido/proposta (ex: "sim", "sim pode", "pode gerar", "confirmo", "fechado", "quero",
-  "isso mesmo", "vamos fechar"). Considere o contexto: só é confirmação se o vendedor tinha acabado de perguntar
-  algo como "Posso gerar a proposta?" ou similar. Uma resposta afirmativa em outro contexto (ex: confirmando
-  só o tamanho ou a espessura) NÃO conta como "confirmou". Na dúvida, use false.
-"""
+def executar_consultar_pedido_minimo(entrada):
+    """Executa a ferramenta 'consultar_pedido_minimo': ajusta tamanho/espessura para valores
+    tecnicamente válidos e calcula o pedido mínimo real dessa combinação."""
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt_extracao}]
-        )
-        texto = response.content[0].text.strip()
-        texto = re.sub(r'^```json\s*|\s*```$', '', texto).strip()
-        return json.loads(texto)
+        produto = entrada.get("produto")
+        largura = float(entrada["largura"])
+        altura = float(entrada["altura"])
+        espessura_pedida = float(entrada["espessura"])
+        cores_n = int(entrada["cores_n"])
+
+        largura, altura, ajustes = ajustar_tamanho(produto, largura, altura, cores_n)
+        espessura = espessura_mais_proxima(espessura_pedida, produto)
+        if abs(espessura - espessura_pedida) > 1e-6:
+            ajustes.append(f"espessura ajustada de {espessura_pedida:g}mm para {espessura:g}mm (opção disponível para este produto)")
+
+        minimo = calcular_pedido_minimo(largura, altura, espessura, cores_n)
+        return {
+            "largura_usada": largura, "altura_usada": altura, "espessura_usada": espessura,
+            "ajustes_feitos": ajustes,
+            "pedido_minimo_milheiros": minimo["milheiros_min"] if minimo else None,
+            "pedido_minimo_kg": minimo["kg_min"] if minimo else None,
+        }
     except Exception as e:
-        print(f"Erro ao extrair pedido: {e}")
-        return {"completo": False}
+        print(f"Erro na ferramenta consultar_pedido_minimo: {e}")
+        return {"erro": "Não foi possível calcular o mínimo para esses dados. Peça para o cliente confirmar produto, tamanho e espessura novamente."}
+
+def executar_calcular_orcamento(entrada):
+    """Executa a ferramenta 'calcular_orcamento': é a ÚNICA forma pela qual um preço final
+    chega até o cliente. A IA nunca calcula preço sozinha - só usa o que esta função devolve."""
+    try:
+        produto = entrada.get("produto")
+        material = entrada.get("material") or "Virgem BD"
+        if material not in MATERIAIS_VALIDOS:
+            material = "Virgem BD"
+        largura = float(entrada["largura"])
+        altura = float(entrada["altura"])
+        espessura_pedida = float(entrada["espessura"])
+        cores_n = int(entrada["cores_n"])
+        impressao = entrada.get("impressao") or "FRENTE"
+        imp_map = "IMPRESSÃO FRENTE / VERSO" if impressao == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
+        milheiros = float(entrada["milheiros"])
+
+        largura, altura, ajustes = ajustar_tamanho(produto, largura, altura, cores_n)
+        espessura = espessura_mais_proxima(espessura_pedida, produto)
+        if abs(espessura - espessura_pedida) > 1e-6:
+            ajustes.append(f"espessura ajustada de {espessura_pedida:g}mm para {espessura:g}mm (opção disponível para este produto)")
+
+        calc = calcular_preco(produto, material, largura, altura, cores_n, imp_map, milheiros, espessura=espessura)
+
+        if not calc["atende_minimo"]:
+            return {
+                "erro": "peso abaixo do mínimo exigido para esta combinação",
+                "pedido_minimo_milheiros": calc["pedido_minimo_milheiros"],
+                "peso_calculado_kg": calc["peso_total_kg"],
+                "peso_minimo_kg": calc["pedido_minimo_kg"],
+                "instrucao": "Explique ao cliente que não é possível fechar nesse peso e peça para aumentar a quantidade para o mínimo informado.",
+            }
+
+        return {
+            "produto": produto, "material": material,
+            "largura_usada": largura, "altura_usada": altura, "espessura_usada": espessura,
+            "cores_n": cores_n, "impressao": impressao, "milheiros": milheiros,
+            "ajustes_feitos": ajustes,
+            "preco_por_milheiro": calc["milheiro"],
+            "preco_total": calc["total"],
+            "peso_total_kg": calc["peso_total_kg"],
+        }
+    except Exception as e:
+        print(f"Erro na ferramenta calcular_orcamento: {e}")
+        return {"erro": "Não foi possível calcular o preço para esta combinação agora. Diga ao cliente que vai confirmar com a equipe e retornar em breve. NÃO informe nenhum valor."}
+
+TOOLS = [
+    {
+        "name": "consultar_pedido_minimo",
+        "description": "Consulta o pedido mínimo (em mil unidades) para uma combinação de produto+tamanho+espessura+cores, ANTES de perguntar a quantidade ao cliente. Também ajusta tamanho/espessura para os valores tecnicamente disponíveis, se necessário. Use assim que tiver produto, largura, altura, espessura e número de cores.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "produto": {"type": "string", "enum": PRODUTOS_VALIDOS},
+                "largura": {"type": "number", "description": "largura em cm"},
+                "altura": {"type": "number", "description": "altura em cm"},
+                "espessura": {"type": "number", "description": "espessura em mm"},
+                "cores_n": {"type": "integer", "description": "número de cores de impressão (0 se sem impressão)"},
+            },
+            "required": ["produto", "largura", "altura", "espessura", "cores_n"],
+        },
+    },
+    {
+        "name": "calcular_orcamento",
+        "description": "Calcula o preço OFICIAL e final do pedido. É a única forma válida de informar preço ao cliente - NUNCA calcule ou estime um valor por conta própria. Use somente quando já tiver TODAS as informações: produto, material, tamanho, espessura, cores e quantidade em milheiros.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "produto": {"type": "string", "enum": PRODUTOS_VALIDOS},
+                "material": {"type": "string", "enum": MATERIAIS_VALIDOS, "description": "usa 'Virgem BD' se o cliente não especificou"},
+                "largura": {"type": "number", "description": "largura em cm"},
+                "altura": {"type": "number", "description": "altura em cm"},
+                "espessura": {"type": "number", "description": "espessura em mm"},
+                "cores_n": {"type": "integer", "description": "número de cores de impressão (0 se sem impressão)"},
+                "impressao": {"type": "string", "enum": ["FRENTE", "FRENTE_VERSO"]},
+                "milheiros": {"type": "number", "description": "quantidade pedida, em milheiros (mil unidades)"},
+            },
+            "required": ["produto", "material", "largura", "altura", "espessura", "cores_n", "impressao", "milheiros"],
+        },
+    },
+    {
+        "name": "fechar_pedido",
+        "description": "Chame esta ferramenta assim que o cliente confirmar claramente que quer fechar/prosseguir com o pedido (ex.: respondeu 'sim' depois de você perguntar 'Posso gerar a proposta?'). Isso avisa o consultor humano para finalizar a venda. Só chame depois de já ter apresentado um preço calculado (via calcular_orcamento) nesta conversa.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "resumo": {
+                    "type": "string",
+                    "description": "Resumo em texto corrido do pedido fechado: produto, tamanho, material, espessura, cores, quantidade em mil unidades e o preço total combinado.",
+                },
+            },
+            "required": ["resumo"],
+        },
+    },
+]
 
 SYSTEM_PROMPT = """Você é o Rui, vendedor de alta performance da Plastcustom. Conhece cada detalhe dos produtos e fecha vendas com naturalidade. Nunca mencione catálogo, sistema ou virtual.
 
@@ -327,11 +397,11 @@ PRODUTOS:
 4. Saco com Aba - saco com dobra superior
 
 TAMANHOS: largura e altura são flexíveis dentro do que a produção consegue imprimir (não é uma lista curta fixa!).
-  O sistema valida automaticamente se o tamanho pedido tem cilindro de impressão disponível; se não tiver,
-  ele já ajusta para o tamanho tecnicamente mais próximo. Quando o contexto trouxer "AJUSTE DE TAMANHO",
-  informe isso ao cliente de forma transparente (ex: "a largura mais próxima disponível é X, vou usar essa").
+  As ferramentas validam automaticamente se o tamanho pedido tem cilindro de impressão disponível; se não tiver,
+  elas já ajustam para o tamanho tecnicamente mais próximo (isso aparece no campo "ajustes_feitos" do resultado).
+  Quando isso acontecer, informe ao cliente de forma transparente (ex: "a largura mais próxima disponível é X, vou usar essa").
   NUNCA diga que um tamanho "não existe" ou "não é padrão" por conta própria - pergunte o tamanho desejado
-  livremente e deixe o sistema validar.
+  livremente e deixe as ferramentas validarem.
 MATERIAIS: Virgem BD (padrão) / Virgem AD (resistente) / PP (transparente) / Reciclado
 ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa, pergunte a espessura SOMENTE depois de saber o produto:
   - Sacola Camiseta: 0,003 / 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,028 / 0,035 / 0,045
@@ -347,20 +417,23 @@ COMO APRESENTAR AS OPÇÕES — MUITO IMPORTANTE:
   um valor que não esteja na lista daquele produto específico). Se o cliente pedir um valor fora da lista,
   explique que não está disponível para aquele produto e mostre de novo as opções válidas dele.
 
-REGRA DE PREÇO — MUITO IMPORTANTE:
-- Você NUNCA calcula ou estima preço por conta própria, nem "proporcionalmente".
-- Quando o contexto desta mensagem trouxer um bloco "DADOS CALCULADOS OFICIAIS", use EXATAMENTE
-  esses valores na sua resposta (não arredonde diferente, não invente outro número).
-- Se esse bloco não estiver presente e o cliente perguntar o preço, NÃO informe nenhum valor.
-  Diga que precisa confirmar mais alguns detalhes (produto, tamanho, quantidade em mil, impressão)
-  antes de calcular certinho.
-- Se aparecer um aviso de erro no cálculo, diga que vai confirmar o valor exato com a equipe e
-  retornar em breve — nunca invente um número nessa situação.
+FERRAMENTAS — MUITO IMPORTANTE:
+- Você tem 3 ferramentas: consultar_pedido_minimo, calcular_orcamento e fechar_pedido.
+- Você NUNCA calcula, estima ou "arredonda" preço ou pedido mínimo por conta própria, nem "proporcionalmente".
+  Todo número de preço ou quantidade mínima DEVE vir de uma dessas ferramentas.
+- Assim que souber produto + largura + altura + espessura + cores, chame consultar_pedido_minimo ANTES de
+  perguntar a quantidade ao cliente, para já informar o mínimo real dessa combinação (nunca diga "30 mil" de
+  forma genérica - cada combinação tem seu próprio mínimo, baseado em peso).
+- Assim que tiver produto + material + tamanho + espessura + cores + impressão + quantidade, chame
+  calcular_orcamento para obter o preço final antes de informar qualquer valor ao cliente.
+- Se uma ferramenta devolver "erro", NÃO informe nenhum valor nem invente um número - siga a instrução
+  que vier junto do erro (normalmente: pedir mais informação, aumentar quantidade, ou avisar que vai
+  confirmar com a equipe).
+- Assim que o cliente confirmar claramente que quer fechar o pedido (depois de você já ter apresentado um
+  preço via calcular_orcamento), chame fechar_pedido com um resumo do pedido.
 
 CONDIÇÕES:
-- Pedido mínimo: NÃO é um número fixo — varia por produto, tamanho e espessura (é sempre baseado em peso:
-  100kg sem impressão / 150kg com impressão). Quando o contexto trouxer "PEDIDO MÍNIMO PARA ESTA COMBINAÇÃO",
-  use EXATAMENTE esse valor em mil unidades. NUNCA diga "30 mil" de forma genérica — cada combinação tem seu próprio mínimo.
+- Pedido mínimo: NÃO é um número fixo — sempre calculado pela ferramenta consultar_pedido_minimo ou calcular_orcamento.
 - Prazo: 30 a 40 dias úteis após aprovação da arte
 - Frete: FOB Curitiba-PR ou CIF negociado
 - Pagamento: 28 dias ou 28/56 dias
@@ -369,19 +442,19 @@ CONDIÇÕES:
 FLUXO DE VENDA:
 1. Cumprimente e pergunte o tipo de negócio
 2. Pergunte qual produto precisa (apresente as opções)
-3. Pergunte o tamanho (largura x altura em cm) - pergunta aberta, não é lista fixa; o sistema ajusta automaticamente se necessário
+3. Pergunte o tamanho (largura x altura em cm) - pergunta aberta, não é lista fixa
 4. Pergunte o material (apresente as opções: Virgem BD - padrão / Virgem AD - resistente / PP - transparente / Reciclado)
 5. Pergunte a espessura, usando a lista específica do produto já escolhido, explicando as faixas e sugerindo com base no uso do cliente
 6. Pergunte sobre impressão, número de cores e logo (isso precisa vir ANTES da quantidade, pois o pedido mínimo depende de ter ou não impressão)
-7. Pergunte a quantidade em MIL unidades — quando o contexto trouxer o pedido mínimo calculado para essa combinação, informe esse valor específico (nunca um número fixo genérico)
-8. Quando tiver os DADOS CALCULADOS OFICIAIS, apresente o preço com confiança
+7. Chame consultar_pedido_minimo e informe o mínimo real, depois pergunte a quantidade em MIL unidades
+8. Chame calcular_orcamento e apresente o preço com confiança
 9. Feche: Posso gerar a proposta para você?
-10. Quando confirmar diga: Perfeito! Estou passando seus dados para nosso consultor finalizar. Em breve entrarão em contato!
+10. Quando confirmar, chame fechar_pedido e diga: Perfeito! Estou passando seus dados para nosso consultor finalizar. Em breve entrarão em contato!
 
 OBJEÇÕES:
 - Tá caro: mostre custo por unidade e sugira quantidade maior
 - Vou pensar: Posso segurar esse preço por 7 dias
-- Pouco: explique mínimo de 30 mil
+- Pouco: explique o pedido mínimo real daquela combinação (calculado pela ferramenta, não um número fixo)
 
 REGRAS:
 - Uma pergunta por vez
@@ -397,7 +470,7 @@ SINAIS = {
     "pediu_orcamento": (["orçamento","proposta","cotação","calcul"], 35),
     "tem_empresa": (["empresa","loja","mercado","farmácia","padaria","cnpj","supermercado"], 15),
     "mandou_logo": (["logo","logomarca","arquivo","arte"], 40),
-    "confirmou_pedido": (["confirmo","quero fechar","fechado","pode gerar","vamos","sim pode"], 50),
+    "confirmou_pedido": (["confirmo","quero fechar","fechado","pode gerar","sim pode","fecha pedido","fecha o pedido"], 50),
     "vou_pensar": (["pensar","depois","talvez","não sei"], -10),
     "ta_caro": (["caro","salgado","muito caro"], -15),
 }
@@ -406,19 +479,40 @@ def limpar_telefone(telefone):
     return re.sub(r'[^0-9]', '', telefone)[:20]
 
 def get_db():
-    return psycopg2.connect(DATABASE_URL)
+    return DB_POOL.getconn()
+
+def release_db(db):
+    DB_POOL.putconn(db)
 
 def buscar_ou_criar_cliente(telefone):
     telefone = limpar_telefone(telefone)
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM clientes WHERE telefone=%s", (telefone,))
-    c = cur.fetchone()
-    if not c:
-        cur.execute("INSERT INTO clientes (telefone) VALUES (%s) RETURNING *", (telefone,))
+    try:
+        # Tenta o jeito seguro contra corrida: só funciona se existir uma restrição
+        # única (UNIQUE) na coluna telefone. Se duas mensagens chegarem ao mesmo tempo
+        # do mesmo número, o banco garante que só um registro é criado.
+        cur.execute(
+            "INSERT INTO clientes (telefone) VALUES (%s) ON CONFLICT (telefone) DO NOTHING RETURNING *",
+            (telefone,)
+        )
         c = cur.fetchone()
         db.commit()
-    cur.close(); db.close()
+        if not c:
+            cur.execute("SELECT * FROM clientes WHERE telefone=%s", (telefone,))
+            c = cur.fetchone()
+    except psycopg2.Error:
+        # Não existe restrição única na tabela ainda -> volta pro comportamento antigo
+        # (funciona, mas sem a proteção total contra corrida). Veja nota no chat sobre
+        # como adicionar essa restrição no banco.
+        db.rollback()
+        cur.execute("SELECT * FROM clientes WHERE telefone=%s", (telefone,))
+        c = cur.fetchone()
+        if not c:
+            cur.execute("INSERT INTO clientes (telefone) VALUES (%s) RETURNING *", (telefone,))
+            c = cur.fetchone()
+            db.commit()
+    cur.close(); release_db(db)
     return dict(c)
 
 def buscar_ou_criar_conversa(cliente_id):
@@ -430,7 +524,7 @@ def buscar_ou_criar_conversa(cliente_id):
         cur.execute("INSERT INTO conversas (cliente_id) VALUES (%s) RETURNING *", (cliente_id,))
         c = cur.fetchone()
         db.commit()
-    cur.close(); db.close()
+    cur.close(); release_db(db)
     return dict(c)
 
 def salvar_mensagem(conversa_id, remetente, conteudo):
@@ -438,14 +532,14 @@ def salvar_mensagem(conversa_id, remetente, conteudo):
     cur = db.cursor()
     cur.execute("INSERT INTO mensagens (conversa_id, remetente, conteudo) VALUES (%s,%s,%s)", (conversa_id, remetente, conteudo))
     cur.execute("UPDATE conversas SET ultima_mensagem=NOW() WHERE id=%s", (conversa_id,))
-    db.commit(); cur.close(); db.close()
+    db.commit(); cur.close(); release_db(db)
 
 def obter_historico(conversa_id):
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT remetente, conteudo FROM mensagens WHERE conversa_id=%s ORDER BY timestamp DESC LIMIT 30", (conversa_id,))
     msgs = list(reversed(cur.fetchall()))
-    cur.close(); db.close()
+    cur.close(); release_db(db)
     return msgs
 
 def calcular_score(conversa_id, cliente_id):
@@ -465,7 +559,7 @@ def calcular_score(conversa_id, cliente_id):
     categoria = "quente" if score >= 80 else "morno" if score >= 50 else "frio"
     cur.execute("INSERT INTO leads (cliente_id, conversa_id, score, categoria) VALUES (%s,%s,%s,%s)", (cliente_id, conversa_id, score, categoria))
     cur.execute("UPDATE conversas SET lead_score=%s WHERE id=%s", (score, conversa_id))
-    db.commit(); cur.close(); db.close()
+    db.commit(); cur.close(); release_db(db)
     return {"score": score, "categoria": categoria}
 
 def enviar_whatsapp(telefone, mensagem, instance="automacao"):
@@ -490,40 +584,33 @@ def notificar_proprietario(cliente, score, conversa_id):
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT id FROM notificacoes WHERE cliente_id=%s AND tipo='lead_quente' AND enviada_em > NOW() - INTERVAL '24 hours'", (cliente["id"],))
     if cur.fetchone():
-        cur.close(); db.close(); return
+        cur.close(); release_db(db); return
     nome = cliente.get("nome") or cliente["telefone"]
     msg = f"LEAD QUENTE PLASTCUSTOM\n\nCliente: {nome}\nTelefone: +{cliente['telefone']}\nScore: {score}%\n\nCliente pronto para fechar! Entre em contato agora."
     enviar_whatsapp(PROPRIETARIO, msg)
     cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'lead_quente')", (cliente["id"], conversa_id))
-    db.commit(); cur.close(); db.close()
+    db.commit(); cur.close(); release_db(db)
 
-def notificar_pedido_fechado(cliente, conversa_id, pedido, calc):
-    """Envia o resumo do pedido para o CONSULTOR_TELEFONE assim que o cliente confirma o fechamento.
-    Só dispara uma vez por conversa (evita reenviar se o cliente confirmar de novo)."""
+def notificar_pedido_fechado(cliente, conversa_id, resumo):
+    """Envia o resumo do pedido (escrito pela própria IA, via a ferramenta fechar_pedido)
+    para o CONSULTOR_TELEFONE. Só dispara uma vez por conversa (evita reenviar se o
+    cliente confirmar de novo por engano)."""
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT id FROM notificacoes WHERE conversa_id=%s AND tipo='pedido_fechado'", (conversa_id,))
     if cur.fetchone():
-        cur.close(); db.close(); return
+        cur.close(); release_db(db); return
     nome = cliente.get("nome") or cliente["telefone"]
-    imp_label = "frente e verso" if pedido.get("impressao") == "FRENTE_VERSO" else "frente"
-    material = pedido.get("material") or "Virgem BD"
     msg = (
         "PEDIDO FECHADO - PLASTCUSTOM\n\n"
         f"Cliente: {nome}\n"
         f"Telefone: +{cliente['telefone']}\n\n"
-        f"Produto: {pedido['produto']} {pedido['largura']}x{pedido['altura']}cm\n"
-        f"Material: {material}\n"
-        f"Espessura: {calc['espessura_usada']}mm\n"
-        f"Impressao: {pedido['cores_n']} cores, {imp_label}\n"
-        f"Quantidade: {pedido['milheiros']} mil unidades\n\n"
-        f"Preco por milheiro: R$ {calc['milheiro']}\n"
-        f"TOTAL: R$ {calc['total']}\n\n"
+        f"{resumo}\n\n"
         "Entre em contato para finalizar!"
     )
     enviar_whatsapp(CONSULTOR_TELEFONE, msg)
     cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'pedido_fechado')", (cliente["id"], conversa_id))
-    db.commit(); cur.close(); db.close()
+    db.commit(); cur.close(); release_db(db)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -544,89 +631,64 @@ def webhook():
         conversa = buscar_ou_criar_conversa(cliente["id"])
         salvar_mensagem(conversa["id"], "cliente", mensagem)
         historico = obter_historico(conversa["id"])
-        hist_txt = "\n".join([f"{'Cliente' if m['remetente']=='cliente' else 'Rui'}: {m['conteudo']}" for m in historico[:-1]])
 
-        # === NOVO: extrai os dados do pedido e calcula o preço EXATO (sem achismo) ===
-        dados_preco_txt = ""
-        calc_resultado = None
-        pedido = extrair_pedido(hist_txt, mensagem)
+        # Monta o histórico como mensagens de verdade (user/assistant), não como um texto único.
+        # Isso é o formato correto da API de mensagens da Claude, e permite usar tool use.
+        messages = []
+        for m in historico[:-1]:
+            role = "user" if m["remetente"] == "cliente" else "assistant"
+            messages.append({"role": role, "content": m["conteudo"]})
+        messages.append({"role": "user", "content": mensagem})
 
-        # Assim que soubermos produto+tamanho+cores, corrigimos largura/altura para valores
-        # que realmente têm cilindro de impressão disponível (a calculadora faz isso automaticamente).
-        if pedido.get("produto") and pedido.get("largura") is not None and pedido.get("altura") is not None and pedido.get("cores_n") is not None:
-            try:
-                nova_l, nova_a, ajustes_tamanho = ajustar_tamanho(
-                    pedido["produto"], pedido["largura"], pedido["altura"], pedido["cores_n"]
-                )
-                if ajustes_tamanho:
-                    pedido["largura"], pedido["altura"] = nova_l, nova_a
-                    dados_preco_txt += "\n\nAJUSTE DE TAMANHO (informe isso ao cliente com transparência): " + "; ".join(ajustes_tamanho) + ".\n"
+        # === Uma única "conversa" com a IA, que pode chamar ferramentas quando precisar ===
+        # (antes eram sempre 2 chamadas de IA por mensagem: uma pra extrair dados, outra pra responder.
+        # Agora é 1 chamada normalmente, e só usa uma 2ª quando a IA realmente precisa calcular algo.)
+        resposta_final = None
+        for _ in range(4):  # limite de segurança contra loop infinito de ferramentas
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=800,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=messages,
+            )
+
+            if response.stop_reason != "tool_use":
+                resposta_final = "".join(b.text for b in response.content if b.type == "text").strip()
+                break
+
+            # A IA pediu pra usar uma ou mais ferramentas: executa cada uma e devolve o resultado
+            messages.append({"role": "assistant", "content": response.content})
+            resultados_tools = []
+            for bloco in response.content:
+                if bloco.type != "tool_use":
+                    continue
+                if bloco.name == "consultar_pedido_minimo":
+                    resultado = executar_consultar_pedido_minimo(bloco.input)
+                elif bloco.name == "calcular_orcamento":
+                    resultado = executar_calcular_orcamento(bloco.input)
+                elif bloco.name == "fechar_pedido":
+                    notificar_pedido_fechado(cliente, conversa["id"], bloco.input.get("resumo", ""))
+                    resultado = {"ok": True, "mensagem": "Consultor notificado com sucesso."}
                 else:
-                    pedido["largura"], pedido["altura"] = nova_l, nova_a
-            except Exception as e:
-                print(f"Erro ao ajustar tamanho: {e}")
+                    resultado = {"erro": f"ferramenta desconhecida: {bloco.name}"}
+                resultados_tools.append({
+                    "type": "tool_result",
+                    "tool_use_id": bloco.id,
+                    "content": json.dumps(resultado, ensure_ascii=False),
+                })
+            messages.append({"role": "user", "content": resultados_tools})
 
-        # Assim que já soubermos produto+tamanho+espessura+cores, calculamos o MÍNIMO REAL
-        # dessa combinação (não é fixo em 30 mil - varia por peso) para o robô já informar certo.
-        campos_base = ["produto", "largura", "altura", "espessura", "cores_n"]
-        if all(pedido.get(c) is not None for c in campos_base):
-            try:
-                espessura_base = espessura_mais_proxima(pedido.get("espessura"), pedido.get("produto"))
-                minimo = calcular_pedido_minimo(pedido["largura"], pedido["altura"], espessura_base, pedido["cores_n"])
-                if minimo:
-                    dados_preco_txt += f"""
+        if resposta_final is None:
+            resposta_final = "Deixa eu confirmar mais alguns detalhes com a equipe e já te retorno, pode ser?"
 
-PEDIDO MÍNIMO PARA ESTA COMBINAÇÃO (produto/tamanho/espessura já escolhidos): {minimo['milheiros_min']:.1f} mil unidades ({minimo['kg_min']} kg mínimo).
-NÃO diga "30 mil" de forma genérica - use exatamente este valor específico.
-"""
-            except Exception as e:
-                print(f"Erro ao calcular pedido mínimo: {e}")
-
-        if pedido.get("completo"):
-            try:
-                imp_map = "IMPRESSÃO FRENTE / VERSO" if pedido.get("impressao") == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
-                material = pedido.get("material") or "Virgem BD"
-                espessura = espessura_mais_proxima(pedido.get("espessura"), pedido.get("produto"))
-                calc = calcular_preco(
-                    produto=pedido["produto"],
-                    material=material,
-                    largura=pedido["largura"],
-                    altura=pedido["altura"],
-                    cores_n=pedido["cores_n"],
-                    imp=imp_map,
-                    milheiros=pedido["milheiros"],
-                    espessura=espessura,
-                )
-                dados_preco_txt += f"""
-
-DADOS CALCULADOS OFICIAIS (use EXATAMENTE estes valores, não calcule nada por conta própria):
-Produto: {pedido['produto']} {pedido['largura']}x{pedido['altura']}cm, {material}, espessura {espessura:.3f}mm, {pedido['cores_n']} cores, {imp_map}
-Preço por milheiro: R$ {calc['milheiro']}
-Total ({pedido['milheiros']} mil unidades): R$ {calc['total']}
-Peso total do pedido: {calc['peso_total_kg']} kg (mínimo exigido: {calc['pedido_minimo_kg']} kg)
-"""
-                if not calc["atende_minimo"]:
-                    dados_preco_txt += "\nATENÇÃO: peso abaixo do mínimo exigido. Explique ao cliente que não é possível fechar nesse peso e sugira aumentar a quantidade.\n"
-                else:
-                    calc_resultado = calc
-            except Exception as e:
-                print(f"Erro ao calcular preço: {e}")
-                dados_preco_txt = "\n\nAVISO: não foi possível calcular o preço automaticamente para esta combinação. NÃO informe nenhum valor - diga que vai confirmar com a equipe e retornar em breve.\n"
-
-        prompt = f"Historico:\n{hist_txt}{dados_preco_txt}\n\nCliente: {mensagem}\nRui:"
-        response = client.messages.create(model="claude-sonnet-4-6", max_tokens=600, system=SYSTEM_PROMPT, messages=[{"role":"user","content":prompt}])
-        resposta = response.content[0].text.strip()
+        resposta = resposta_final
         salvar_mensagem(conversa["id"], "ia", resposta)
         lead = calcular_score(conversa["id"], cliente["id"])
         # NOTA: o envio da mensagem ao cliente é feito pelo n8n (HTTP Request1),
         # por isso NÃO chamamos enviar_whatsapp() aqui para o cliente (evita duplicar).
         if lead["score"] >= 80:
             notificar_proprietario(cliente, lead["score"], conversa["id"])
-
-        # Pedido fechado: cliente confirmou (segundo a própria IA, não busca frágil de palavras-chave)
-        # e já temos o cálculo oficial -> avisa o consultor
-        if calc_resultado and pedido.get("confirmou"):
-            notificar_pedido_fechado(cliente, conversa["id"], pedido, calc_resultado)
 
         return jsonify({"ok": True, "resposta": resposta, "score": lead["score"], "categoria": lead["categoria"]})
     except Exception as e:
