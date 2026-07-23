@@ -2,3 +2,5 @@ anthropic
 psycopg2-binary
 requests
 flask
+gunicorn
+
