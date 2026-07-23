@@ -1,4 +1,4 @@
-import os, re, json, math
+import os, re, json, math, logging
 import anthropic
 import psycopg2
 from psycopg2 import pool as pg_pool
@@ -6,12 +6,18 @@ from psycopg2.extras import RealDictCursor
 import requests
 from flask import Flask, request, jsonify
 
+# Log estruturado (nível + hora + mensagem) em vez de print() solto.
+# Continua indo pro mesmo lugar (stdout, visível nos logs do EasyPanel), mas agora
+# dá pra saber a hora exata e filtrar por gravidade (INFO/WARNING/ERROR).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger("vendedor_ia")
+
 app = Flask(__name__)
 client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
 DATABASE_URL = os.environ["DATABASE_URL"]
-# Pool de conexões: reaproveita conexões abertas em vez de criar uma nova a cada consulta.
-# min=1 conexão sempre pronta, max=10 conexões simultâneas por processo do servidor.
-DB_POOL = pg_pool.ThreadedConnectionPool(1, 10, dsn=DATABASE_URL)
 EVOLUTION_URL = os.environ["EVOLUTION_API_URL"]
 EVOLUTION_KEY = os.environ["EVOLUTION_API_KEY"]
 PROPRIETARIO = os.environ["PROPRIETARIO_TELEFONE"]
@@ -59,6 +65,9 @@ PRECOS_PP = {
 }
 
 MATERIAIS_VALIDOS = ["Virgem BD", "Virgem AD", "Reciclado Cor", "Reciclado Sem Cor", "Polipropileno (PP)"]
+# Cor do PRODUTO (a cor da sacola em si) - diferente de "cores de impressão" (a logomarca).
+# Não afeta o preço, é só uma característica visual do pedido.
+CORES_PRODUTO_VALIDAS = ["Branca", "Preta", "Azul", "Vermelha", "Verde", "Amarela", "Laranja", "Cinza", "Transparente", "Natural"]
 PRODUTOS_VALIDOS = ["Sacola Camiseta", "Sacola Vazada", "Saco Impresso Solda Fundo", "Saco com Aba"]
 
 # ============================================================
@@ -290,7 +299,7 @@ def executar_consultar_pedido_minimo(entrada):
             "pedido_minimo_kg": minimo["kg_min"] if minimo else None,
         }
     except Exception as e:
-        print(f"Erro na ferramenta consultar_pedido_minimo: {e}")
+        logger.error(f"Erro na ferramenta consultar_pedido_minimo: {e}")
         return {"erro": "Não foi possível calcular o mínimo para esses dados. Peça para o cliente confirmar produto, tamanho e espessura novamente."}
 
 def executar_calcular_orcamento(entrada):
@@ -301,6 +310,9 @@ def executar_calcular_orcamento(entrada):
         material = entrada.get("material") or "Virgem BD"
         if material not in MATERIAIS_VALIDOS:
             material = "Virgem BD"
+        cor_produto = entrada.get("cor_produto") or "Transparente"
+        if cor_produto not in CORES_PRODUTO_VALIDAS:
+            cor_produto = "Transparente"
         largura = float(entrada["largura"])
         altura = float(entrada["altura"])
         espessura_pedida = float(entrada["espessura"])
@@ -326,7 +338,7 @@ def executar_calcular_orcamento(entrada):
             }
 
         return {
-            "produto": produto, "material": material,
+            "produto": produto, "material": material, "cor_produto": cor_produto,
             "largura_usada": largura, "altura_usada": altura, "espessura_usada": espessura,
             "cores_n": cores_n, "impressao": impressao, "milheiros": milheiros,
             "ajustes_feitos": ajustes,
@@ -335,7 +347,7 @@ def executar_calcular_orcamento(entrada):
             "peso_total_kg": calc["peso_total_kg"],
         }
     except Exception as e:
-        print(f"Erro na ferramenta calcular_orcamento: {e}")
+        logger.error(f"Erro na ferramenta calcular_orcamento: {e}")
         return {"erro": "Não foi possível calcular o preço para esta combinação agora. Diga ao cliente que vai confirmar com a equipe e retornar em breve. NÃO informe nenhum valor."}
 
 TOOLS = [
@@ -362,6 +374,7 @@ TOOLS = [
             "properties": {
                 "produto": {"type": "string", "enum": PRODUTOS_VALIDOS},
                 "material": {"type": "string", "enum": MATERIAIS_VALIDOS, "description": "usa 'Virgem BD' se o cliente não especificou"},
+                "cor_produto": {"type": "string", "enum": CORES_PRODUTO_VALIDAS, "description": "cor da sacola em si (não afeta o preço, é só informativo). Use 'Transparente' se o cliente não especificou."},
                 "largura": {"type": "number", "description": "largura em cm"},
                 "altura": {"type": "number", "description": "altura em cm"},
                 "espessura": {"type": "number", "description": "espessura em mm"},
@@ -386,6 +399,20 @@ TOOLS = [
             "required": ["resumo"],
         },
     },
+    {
+        "name": "transferir_para_consultor",
+        "description": "Chame esta ferramenta quando você não souber responder algo importante ao cliente, quando a pergunta estiver fora do que você sabe (fora de vendas de sacolas/sacos plásticos), ou quando o cliente pedir claramente para falar com uma pessoa/atendente humano. Isso avisa um consultor humano para assumir a conversa.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "motivo": {
+                    "type": "string",
+                    "description": "Resumo breve do que o cliente perguntou ou precisa, que você não conseguiu resolver sozinho.",
+                },
+            },
+            "required": ["motivo"],
+        },
+    },
 ]
 
 SYSTEM_PROMPT = """Você é o Rui, vendedor de alta performance da Plastcustom. Conhece cada detalhe dos produtos e fecha vendas com naturalidade. Nunca mencione catálogo, sistema ou virtual.
@@ -403,6 +430,9 @@ TAMANHOS: largura e altura são flexíveis dentro do que a produção consegue i
   NUNCA diga que um tamanho "não existe" ou "não é padrão" por conta própria - pergunte o tamanho desejado
   livremente e deixe as ferramentas validarem.
 MATERIAIS: Virgem BD (padrão) / Virgem AD (resistente) / PP (transparente) / Reciclado
+CORES DO PRODUTO (a cor da sacola em si - NÃO é a cor de impressão da logomarca, é diferente!):
+  Branca / Preta / Azul / Vermelha / Verde / Amarela / Laranja / Cinza / Transparente / Natural
+  Isso NÃO afeta o preço, é só uma característica visual do pedido. "Transparente" é o padrão se o cliente não escolher.
 ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa, pergunte a espessura SOMENTE depois de saber o produto:
   - Sacola Camiseta: 0,003 / 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,028 / 0,035 / 0,045
   - Sacola Vazada, Saco Impresso Solda Fundo, Saco com Aba: 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,010 / 0,011 / 0,012 / 0,013 / 0,014 / 0,045
@@ -410,15 +440,30 @@ ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa, pergunte a
 IMPRESSÃO: até 6 cores, frente e/ou verso. Clichê cobrado à parte na primeira compra.
 
 COMO APRESENTAR AS OPÇÕES — MUITO IMPORTANTE:
-- Sempre que for perguntar produto, material, espessura ou número de cores, apresente as opções
-  em formato de lista curta (menu), para o cliente só escolher — não faça pergunta totalmente aberta.
-- Tamanho (largura x altura) É pergunta aberta - não existe uma lista curta fixa de tamanhos.
+- Sempre que for perguntar produto, material, cor do produto, espessura ou número de cores de impressão, apresente as opções
+  em formato de MENU NUMERADO, para o cliente só responder com o número — não faça pergunta totalmente aberta.
+- Formato padrão do menu (siga exatamente este estilo):
+  1. Primeira opção
+  2. Segunda opção
+  3. Terceira opção
+  Depois do menu, uma linha curta tipo "Pode responder só com o número 😊".
+- Não use bullets (•) nem travessões soltos para listar opções - sempre números.
+- Aceite tanto o número quanto o nome da opção quando o cliente responder (ex: cliente pode digitar "2" ou "Sacola Vazada", os dois valem).
+- Tamanho (largura x altura) É pergunta aberta - não existe uma lista curta fixa de tamanhos, não vira menu numerado.
 - Ao perguntar a espessura, use APENAS a lista de espessuras do produto que o cliente já escolheu (nunca ofereça
   um valor que não esteja na lista daquele produto específico). Se o cliente pedir um valor fora da lista,
-  explique que não está disponível para aquele produto e mostre de novo as opções válidas dele.
+  explique que não está disponível para aquele produto e mostre de novo as opções válidas dele (também em menu numerado).
+
+QUANDO VOCÊ NÃO SOUBER RESPONDER — MUITO IMPORTANTE:
+- Se o cliente perguntar algo fora do que você sabe (fora de vendas de sacolas/sacos plásticos), ou pedir
+  claramente para falar com uma pessoa/atendente humano, ou você não conseguir ajudar de alguma forma
+  depois de tentar, NÃO invente uma resposta e NÃO fique repetindo a mesma coisa.
+- Nesse caso, chame a ferramenta transferir_para_consultor, e avise o cliente de forma simpática que um
+  consultor da equipe vai assumir a conversa em breve (ex: "Essa pergunta é melhor respondida por alguém
+  da nossa equipe - já vou encaminhar você para um consultor, tá bem?").
 
 FERRAMENTAS — MUITO IMPORTANTE:
-- Você tem 3 ferramentas: consultar_pedido_minimo, calcular_orcamento e fechar_pedido.
+- Você tem 4 ferramentas: consultar_pedido_minimo, calcular_orcamento, fechar_pedido e transferir_para_consultor.
 - Você NUNCA calcula, estima ou "arredonda" preço ou pedido mínimo por conta própria, nem "proporcionalmente".
   Todo número de preço ou quantidade mínima DEVE vir de uma dessas ferramentas.
 - Assim que souber produto + largura + altura + espessura + cores, chame consultar_pedido_minimo ANTES de
@@ -444,12 +489,13 @@ FLUXO DE VENDA:
 2. Pergunte qual produto precisa (apresente as opções)
 3. Pergunte o tamanho (largura x altura em cm) - pergunta aberta, não é lista fixa
 4. Pergunte o material (apresente as opções: Virgem BD - padrão / Virgem AD - resistente / PP - transparente / Reciclado)
-5. Pergunte a espessura, usando a lista específica do produto já escolhido, explicando as faixas e sugerindo com base no uso do cliente
-6. Pergunte sobre impressão, número de cores e logo (isso precisa vir ANTES da quantidade, pois o pedido mínimo depende de ter ou não impressão)
-7. Chame consultar_pedido_minimo e informe o mínimo real, depois pergunte a quantidade em MIL unidades
-8. Chame calcular_orcamento e apresente o preço com confiança
-9. Feche: Posso gerar a proposta para você?
-10. Quando confirmar, chame fechar_pedido e diga: Perfeito! Estou passando seus dados para nosso consultor finalizar. Em breve entrarão em contato!
+5. Pergunte a cor do produto (apresente as opções: Branca / Preta / Azul / Vermelha / Verde / Amarela / Laranja / Cinza / Transparente / Natural)
+6. Pergunte a espessura, usando a lista específica do produto já escolhido, explicando as faixas e sugerindo com base no uso do cliente
+7. Pergunte sobre impressão, número de cores e logo (isso precisa vir ANTES da quantidade, pois o pedido mínimo depende de ter ou não impressão)
+8. Chame consultar_pedido_minimo e informe o mínimo real, depois pergunte a quantidade em MIL unidades
+9. Chame calcular_orcamento e apresente o preço com confiança
+10. Feche: Posso gerar a proposta para você?
+11. Quando confirmar, chame fechar_pedido e diga: Perfeito! Estou passando seus dados para nosso consultor finalizar. Em breve entrarão em contato!
 
 OBJEÇÕES:
 - Tá caro: mostre custo por unidade e sugira quantidade maior
@@ -478,11 +524,22 @@ SINAIS = {
 def limpar_telefone(telefone):
     return re.sub(r'[^0-9]', '', telefone)[:20]
 
+_db_pool = None
+
+def get_pool():
+    """Cria o pool de conexões só na primeira vez que for realmente necessário
+    (não ao importar o arquivo). Isso também é mais seguro com o Gunicorn:
+    cada processo worker cria o seu próprio pool depois de nascer."""
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = pg_pool.ThreadedConnectionPool(1, 10, dsn=DATABASE_URL)
+    return _db_pool
+
 def get_db():
-    return DB_POOL.getconn()
+    return get_pool().getconn()
 
 def release_db(db):
-    DB_POOL.putconn(db)
+    get_pool().putconn(db)
 
 def buscar_ou_criar_cliente(telefone):
     telefone = limpar_telefone(telefone)
@@ -571,13 +628,13 @@ def enviar_whatsapp(telefone, mensagem, instance="automacao"):
     headers = {"Content-Type": "application/json", "apikey": EVOLUTION_KEY}
     # formato correto da Evolution API v2: "number" e "text" no nível raiz
     payload = {"number": telefone, "text": mensagem}
-    print(f"Enviando para {telefone} via {instance}")
-    print(f"URL: {url}")
+    logger.info(f"Enviando WhatsApp para {telefone} via {instance}")
+    logger.info(f"URL de envio: {url}")
     try:
         r = requests.post(url, json=payload, headers=headers, timeout=10)
-        print(f"Status: {r.status_code} | Resposta: {r.text[:200]}")
+        logger.info(f"Resposta da Evolution API: status={r.status_code} corpo={r.text[:200]}")
     except Exception as e:
-        print(f"Erro ao enviar: {e}")
+        logger.error(f"Erro ao enviar WhatsApp: {e}")
 
 def notificar_proprietario(cliente, score, conversa_id):
     db = get_db()
@@ -589,6 +646,30 @@ def notificar_proprietario(cliente, score, conversa_id):
     msg = f"LEAD QUENTE PLASTCUSTOM\n\nCliente: {nome}\nTelefone: +{cliente['telefone']}\nScore: {score}%\n\nCliente pronto para fechar! Entre em contato agora."
     enviar_whatsapp(PROPRIETARIO, msg)
     cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'lead_quente')", (cliente["id"], conversa_id))
+    db.commit(); cur.close(); release_db(db)
+
+def notificar_transferencia(cliente, conversa_id, motivo):
+    """Avisa o consultor que o robô não conseguiu ajudar e precisa de um humano.
+    Tem um intervalo de 2h entre avisos pra mesma conversa, pra não virar spam
+    se o cliente continuar perguntando coisas fora do que o robô sabe."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "SELECT id FROM notificacoes WHERE conversa_id=%s AND tipo='transferencia' AND enviada_em > NOW() - INTERVAL '2 hours'",
+        (conversa_id,)
+    )
+    if cur.fetchone():
+        cur.close(); release_db(db); return
+    nome = cliente.get("nome") or cliente["telefone"]
+    msg = (
+        "CLIENTE PRECISA DE AJUDA HUMANA - PLASTCUSTOM\n\n"
+        f"Cliente: {nome}\n"
+        f"Telefone: +{cliente['telefone']}\n\n"
+        f"Motivo: {motivo}\n\n"
+        "O robô já avisou o cliente que um consultor vai assumir a conversa."
+    )
+    enviar_whatsapp(CONSULTOR_TELEFONE, msg)
+    cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'transferencia')", (cliente["id"], conversa_id))
     db.commit(); cur.close(); release_db(db)
 
 def notificar_pedido_fechado(cliente, conversa_id, resumo):
@@ -670,6 +751,9 @@ def webhook():
                 elif bloco.name == "fechar_pedido":
                     notificar_pedido_fechado(cliente, conversa["id"], bloco.input.get("resumo", ""))
                     resultado = {"ok": True, "mensagem": "Consultor notificado com sucesso."}
+                elif bloco.name == "transferir_para_consultor":
+                    notificar_transferencia(cliente, conversa["id"], bloco.input.get("motivo", ""))
+                    resultado = {"ok": True, "mensagem": "Consultor avisado, vai assumir a conversa em breve."}
                 else:
                     resultado = {"erro": f"ferramenta desconhecida: {bloco.name}"}
                 resultados_tools.append({
