@@ -29,7 +29,12 @@ WEBHOOK_SECRET = os.environ["WEBHOOK_SECRET"]  # segredo compartilhado com o n8n
 # (Plastcustom_Orcamento.html — atualizada em 23/06/2026)
 # Faixas: v1 = 150-200kg | v2 = 210-400kg | v3 = 410kg ou +
 # ============================================================
-TABELA = [
+# TABELA_PADRAO / PRECOS_PP_PADRAO servem de rede de segurança: são usadas SOMENTE se o
+# arquivo Plastcustom_Orcamento.html não for encontrado ou não puder ser lido (ver mais
+# abaixo, função carregar_tabela_precos_do_html). Na operação normal, os valores de verdade
+# vêm direto do arquivo HTML - assim, pra atualizar preços, basta substituir esse arquivo
+# no GitHub e clicar em "Implement", sem precisar editar nenhum código Python.
+TABELA_PADRAO = [
     {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 36.66, "v2": 36.01, "v3": 34.71},
     {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 37.83, "v2": 37.31, "v3": 36.01},
     {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 39.13, "v2": 38.48, "v3": 37.31},
@@ -51,7 +56,7 @@ TABELA = [
     {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 30.03, "v2": 30.03, "v3": 30.03},
 ]
 
-PRECOS_PP = {
+PRECOS_PP_PADRAO = {
     "com_nf": [
         {"ate": 200,   "frente2": 30.00, "frente3": 31.50, "verso2": 32.00, "verso3": 33.50},
         {"ate": 400,   "frente2": 29.50, "frente3": 31.00, "verso2": 31.50, "verso3": 33.00},
@@ -63,6 +68,66 @@ PRECOS_PP = {
         {"ate": 99999, "frente2": 25.94, "frente3": 27.30, "verso2": 27.76, "verso3": 29.12},
     ]
 }
+
+def carregar_tabela_precos_do_html(caminho):
+    """Lê a tabela de fator/kg (TABELA) e a tabela de PP (PRECOS_PP) diretamente do arquivo
+    HTML da calculadora oficial da Plastcustom. Assim, quando o arquivo é substituído por uma
+    versão nova (com preços atualizados), o robô passa a usar os valores novos automaticamente
+    na próxima vez que o serviço reiniciar - sem precisar editar nenhum código Python.
+    Se o arquivo não existir ou não puder ser lido, devolve (None, None) e quem chamou usa
+    a tabela padrão (TABELA_PADRAO / PRECOS_PP_PADRAO) como rede de segurança."""
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            texto = f.read()
+    except (FileNotFoundError, OSError):
+        return None, None
+
+    tabela = []
+    m_tabela = re.search(r'TABELA:\s*\[(.*?)\n\s*\],\s*\n\s*MAP_PRECO', texto, re.DOTALL)
+    if m_tabela:
+        linha_regex = re.compile(
+            r"\{\s*m:\s*'([^']+)'\s*,\s*i:\s*'([^']+)'\s*,\s*c:\s*'([^']+)'\s*,"
+            r"\s*v1:\s*([\d.]+)\s*,\s*v2:\s*([\d.]+)\s*,\s*v3:\s*([\d.]+)\s*\}"
+        )
+        for mm in linha_regex.finditer(m_tabela.group(1)):
+            tabela.append({
+                "m": mm.group(1), "i": mm.group(2), "c": mm.group(3),
+                "v1": float(mm.group(4)), "v2": float(mm.group(5)), "v3": float(mm.group(6)),
+            })
+
+    precos_pp = {"com_nf": [], "sem_nf": []}
+    m_pp = re.search(r'PRECOS_PP:\s*\{(.*?)\n\s*\},\s*\n\s*TABELA_ESPECIAL_MILHEIRO', texto, re.DOTALL)
+    if m_pp:
+        for chave in ("com_nf", "sem_nf"):
+            m_chave = re.search(rf'{chave}:\s*\[(.*?)\]', m_pp.group(1), re.DOTALL)
+            if m_chave:
+                linha_regex_pp = re.compile(
+                    r"\{\s*ate:\s*(\d+)\s*,\s*frente2:\s*([\d.]+)\s*,\s*frente3:\s*([\d.]+)\s*,"
+                    r"\s*verso2:\s*([\d.]+)\s*,\s*verso3:\s*([\d.]+)\s*\}"
+                )
+                for mm in linha_regex_pp.finditer(m_chave.group(1)):
+                    precos_pp[chave].append({
+                        "ate": int(mm.group(1)), "frente2": float(mm.group(2)), "frente3": float(mm.group(3)),
+                        "verso2": float(mm.group(4)), "verso3": float(mm.group(5)),
+                    })
+
+    # Só considera válido se extraiu uma quantidade razoável de linhas - evita usar
+    # uma tabela vazia/quebrada por causa de um arquivo corrompido ou formatado diferente.
+    if len(tabela) < 10 or len(precos_pp["com_nf"]) < 1:
+        return None, None
+    return tabela, precos_pp
+
+
+_CAMINHO_CALCULADORA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Plastcustom_Orcamento.html")
+_tabela_carregada, _precos_pp_carregados = carregar_tabela_precos_do_html(_CAMINHO_CALCULADORA)
+if _tabela_carregada:
+    TABELA = _tabela_carregada
+    PRECOS_PP = _precos_pp_carregados
+    logger.info(f"Tabela de preços carregada de {_CAMINHO_CALCULADORA} ({len(TABELA)} linhas)")
+else:
+    TABELA = TABELA_PADRAO
+    PRECOS_PP = PRECOS_PP_PADRAO
+    logger.warning(f"Não encontrou/não conseguiu ler {_CAMINHO_CALCULADORA} - usando tabela de preços padrão embutida no código")
 
 MATERIAIS_VALIDOS = ["Virgem BD", "Virgem AD", "Reciclado Cor", "Reciclado Sem Cor", "Polipropileno (PP)"]
 # Cor do PRODUTO (a cor da sacola em si) - diferente de "cores de impressão" (a logomarca).
@@ -484,6 +549,29 @@ CONDIÇÕES:
 - Pagamento: 28 dias ou 28/56 dias
 - Validade da proposta: 7 dias
 
+FORMATAÇÃO DE MENSAGENS — MUITO IMPORTANTE:
+- O WhatsApp NÃO entende tabelas em Markdown (símbolos | e ---). NUNCA use esse formato -
+  ele aparece quebrado, cheio de barras verticais, nada profissional.
+- O WhatsApp entende: *negrito* (um asterisco de cada lado), _itálico_ (underline), e quebras de linha normais.
+- Ao apresentar o orçamento final (depois de calcular_orcamento), use este formato, com quebras de linha
+  e negrito nos rótulos, SEM tabela:
+
+*Orçamento Plastcustom* 🎉
+
+*Produto:* [produto] [largura]x[altura]cm
+*Material:* [material]
+*Cor:* [cor do produto]
+*Espessura:* [espessura]mm
+*Impressão:* [cores] cores, [frente/frente e verso]
+*Quantidade:* [milheiros] mil unidades
+
+*Preço por milheiro:* R$ [valor]
+*Preço total:* R$ [valor]
+
+Prazo de 30 a 40 dias úteis após aprovação da arte. Pagamento em 28 dias ou 28/56 dias. Proposta válida por 7 dias.
+
+Posso gerar a proposta para você?
+
 FLUXO DE VENDA:
 1. Cumprimente e pergunte o tipo de negócio
 2. Pergunte qual produto precisa (apresente as opções)
@@ -674,11 +762,15 @@ def notificar_transferencia(cliente, conversa_id, motivo):
 
 def notificar_pedido_fechado(cliente, conversa_id, resumo):
     """Envia o resumo do pedido (escrito pela própria IA, via a ferramenta fechar_pedido)
-    para o CONSULTOR_TELEFONE. Só dispara uma vez por conversa (evita reenviar se o
-    cliente confirmar de novo por engano)."""
+    para o CONSULTOR_TELEFONE. Tem um intervalo curto (5 min) só pra evitar notificação
+    duplicada se a IA chamar a ferramenta duas vezes seguidas pela mesma confirmação -
+    mas NÃO bloqueia pedidos novos/diferentes feitos depois, na mesma conversa."""
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id FROM notificacoes WHERE conversa_id=%s AND tipo='pedido_fechado'", (conversa_id,))
+    cur.execute(
+        "SELECT id FROM notificacoes WHERE conversa_id=%s AND tipo='pedido_fechado' AND enviada_em > NOW() - INTERVAL '5 minutes'",
+        (conversa_id,)
+    )
     if cur.fetchone():
         cur.close(); release_db(db); return
     nome = cliente.get("nome") or cliente["telefone"]
