@@ -2,7 +2,7 @@ import os, re, json, math, logging
 import anthropic
 import psycopg2
 from psycopg2 import pool as pg_pool
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, Json
 import requests
 from flask import Flask, request, jsonify
 
@@ -341,6 +341,92 @@ def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, 
         "atende_minimo": total_kg >= pedido_min_kg,
     }
 
+CAMPOS_OBRIGATORIOS_ITEM = ["produto", "largura", "altura", "espessura", "cores_n", "impressao", "milheiros"]
+
+def processar_item_pedido(item):
+    """Valida e ajusta UM item do pedido (tamanho/espessura), calcula o que falta, e
+    gera uma prévia de preço se já estiver completo. Função pura (sem banco de dados),
+    o que a deixa fácil de testar isoladamente."""
+    ajustes = []
+    produto = item.get("produto")
+    material = item.get("material")
+    if material is not None and material not in MATERIAIS_VALIDOS:
+        material = None
+    cor_produto = item.get("cor_produto")
+    if cor_produto is not None and cor_produto not in CORES_PRODUTO_VALIDAS:
+        cor_produto = None
+    largura = item.get("largura")
+    altura = item.get("altura")
+    espessura = item.get("espessura")
+    cores_n = item.get("cores_n")
+    impressao = item.get("impressao")
+    if impressao is not None and impressao not in ("FRENTE", "FRENTE_VERSO"):
+        impressao = None
+    milheiros = item.get("milheiros")
+
+    if produto in PRODUTOS_VALIDOS and largura is not None and altura is not None and cores_n is not None:
+        try:
+            largura, altura, ajustes_tam = ajustar_tamanho(produto, largura, altura, int(cores_n))
+            ajustes.extend(ajustes_tam)
+        except (TypeError, ValueError):
+            pass
+
+    if produto in PRODUTOS_VALIDOS and espessura is not None:
+        try:
+            espessura_antiga = float(espessura)
+            espessura = espessura_mais_proxima(espessura, produto)
+            if abs(espessura - espessura_antiga) > 1e-6:
+                ajustes.append(f"espessura ajustada de {espessura_antiga:g}mm para {espessura:g}mm (opção disponível para este produto)")
+        except (TypeError, ValueError):
+            pass
+
+    item_normalizado = {
+        "produto": produto, "material": material, "cor_produto": cor_produto,
+        "largura": largura, "altura": altura, "espessura": espessura,
+        "cores_n": cores_n, "impressao": impressao, "milheiros": milheiros,
+    }
+    faltando = [c for c in CAMPOS_OBRIGATORIOS_ITEM if item_normalizado.get(c) is None]
+    completo = not faltando
+
+    preco_preview = None
+    if completo:
+        try:
+            imp_map = "IMPRESSÃO FRENTE / VERSO" if impressao == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
+            calc = calcular_preco(produto, material or "Virgem BD", largura, altura, int(cores_n), imp_map, milheiros, espessura=espessura)
+            preco_preview = {
+                "preco_por_milheiro": calc["milheiro"], "preco_total": calc["total"],
+                "atende_minimo": calc["atende_minimo"], "pedido_minimo_milheiros": calc["pedido_minimo_milheiros"],
+            }
+        except Exception as e:
+            logger.warning(f"Não foi possível gerar prévia de preço para item: {e}")
+
+    return {"item": item_normalizado, "ajustes": ajustes, "faltando": faltando, "completo": completo, "preco_preview": preco_preview}
+
+def executar_atualizar_pedido(conversa_id, entrada):
+    """Executa a ferramenta 'atualizar_pedido': é o coração da memória estruturada da
+    conversa. Recebe TODOS os itens que a IA já sabe sobre o pedido (um ou vários
+    tamanhos/produtos), valida/ajusta cada um, salva como estado da conversa, e
+    devolve o que falta em cada item - assim a IA nunca precisa perguntar de novo
+    algo que já foi respondido."""
+    try:
+        itens_entrada = entrada.get("itens") or []
+        resultados = [processar_item_pedido(it) for it in itens_entrada]
+        estado = {"itens": [r["item"] for r in resultados], "observacoes": entrada.get("observacoes", "")}
+        salvar_estado_pedido(conversa_id, estado)
+        return {
+            "itens": [
+                {**r["item"], "ajustes_feitos": r["ajustes"], "faltando": r["faltando"],
+                 "completo": r["completo"], "preco_preview": r["preco_preview"]}
+                for r in resultados
+            ],
+            "observacoes": estado["observacoes"],
+            "total_itens": len(resultados),
+            "itens_completos": sum(1 for r in resultados if r["completo"]),
+        }
+    except Exception as e:
+        logger.error(f"Erro na ferramenta atualizar_pedido: {e}")
+        return {"erro": "Não foi possível atualizar o pedido agora. Continue a conversa normalmente e tente de novo em seguida."}
+
 def executar_consultar_pedido_minimo(entrada):
     """Executa a ferramenta 'consultar_pedido_minimo': ajusta tamanho/espessura para valores
     tecnicamente válidos e calcula o pedido mínimo real dessa combinação."""
@@ -417,6 +503,35 @@ def executar_calcular_orcamento(entrada):
 
 TOOLS = [
     {
+        "name": "atualizar_pedido",
+        "description": "Chame esta ferramenta SEMPRE que o cliente informar qualquer dado novo sobre o pedido - mesmo que venha tudo numa mensagem só, ou aos poucos. Pode incluir MAIS DE UM item se o cliente mencionar vários tamanhos ou produtos na mesma mensagem (ex: '30x40, 40x50 e 50x50'). Envie a lista COMPLETA de itens que você já conhece desta conversa (os de antes + os novos) - esta ferramenta substitui o estado anterior pelo que você enviar. O resultado te diz o que falta em cada item, então você nunca precisa perguntar de novo o que já foi informado.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "itens": {
+                    "type": "array",
+                    "description": "Lista de TODOS os itens do pedido que você já sabe (um item = um produto+tamanho). Inclua os já conhecidos de mensagens anteriores MAIS os novos desta mensagem.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "produto": {"type": "string", "enum": PRODUTOS_VALIDOS},
+                            "material": {"type": "string", "enum": MATERIAIS_VALIDOS},
+                            "cor_produto": {"type": "string", "enum": CORES_PRODUTO_VALIDAS},
+                            "largura": {"type": "number", "description": "largura em cm"},
+                            "altura": {"type": "number", "description": "altura em cm"},
+                            "espessura": {"type": "number", "description": "espessura em mm"},
+                            "cores_n": {"type": "integer", "description": "número de cores de impressão (0 se sem impressão)"},
+                            "impressao": {"type": "string", "enum": ["FRENTE", "FRENTE_VERSO"]},
+                            "milheiros": {"type": "number", "description": "quantidade em milheiros (mil unidades)"},
+                        },
+                    },
+                },
+                "observacoes": {"type": "string", "description": "Qualquer observação extra relevante sobre o pedido (opcional)."},
+            },
+            "required": ["itens"],
+        },
+    },
+    {
         "name": "consultar_pedido_minimo",
         "description": "Consulta o pedido mínimo (em mil unidades) para uma combinação de produto+tamanho+espessura+cores, ANTES de perguntar a quantidade ao cliente. Também ajusta tamanho/espessura para os valores tecnicamente disponíveis, se necessário. Use assim que tiver produto, largura, altura, espessura e número de cores.",
         "input_schema": {
@@ -478,9 +593,21 @@ TOOLS = [
             "required": ["motivo"],
         },
     },
+    {
+        "name": "solicitar_privacidade",
+        "description": "Chame esta ferramenta sempre que o cliente perguntar sobre os dados pessoais dele (o que guardamos, por quê), ou pedir para ver, corrigir, ou APAGAR/EXCLUIR os dados dele, ou se opuser ao uso dos dados (direitos da LGPD). NÃO apague nada sozinho - isso avisa um humano que vai executar o pedido com segurança.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tipo": {"type": "string", "enum": ["acesso", "correcao", "exclusao", "duvida"], "description": "acesso = quer saber o que temos; correcao = quer corrigir algo; exclusao = quer apagar os dados; duvida = pergunta geral sobre privacidade"},
+                "detalhe": {"type": "string", "description": "O que exatamente o cliente pediu, em texto corrido."},
+            },
+            "required": ["tipo", "detalhe"],
+        },
+    },
 ]
 
-SYSTEM_PROMPT = """Você é o Rui, vendedor de alta performance da Plastcustom. Conhece cada detalhe dos produtos e fecha vendas com naturalidade. Nunca mencione catálogo, sistema ou virtual.
+SYSTEM_PROMPT = """Você é o Rui, vendedor de alta performance da Plastcustom. Conhece cada detalhe dos produtos e fecha vendas com naturalidade, como um vendedor humano experiente — não como um formulário sequencial. Nunca mencione catálogo, sistema ou virtual.
 
 PRODUTOS:
 1. Sacola Camiseta - alça integrada no corpo
@@ -489,72 +616,93 @@ PRODUTOS:
 4. Saco com Aba - saco com dobra superior
 
 TAMANHOS: largura e altura são flexíveis dentro do que a produção consegue imprimir (não é uma lista curta fixa!).
-  As ferramentas validam automaticamente se o tamanho pedido tem cilindro de impressão disponível; se não tiver,
-  elas já ajustam para o tamanho tecnicamente mais próximo (isso aparece no campo "ajustes_feitos" do resultado).
-  Quando isso acontecer, informe ao cliente de forma transparente (ex: "a largura mais próxima disponível é X, vou usar essa").
-  NUNCA diga que um tamanho "não existe" ou "não é padrão" por conta própria - pergunte o tamanho desejado
-  livremente e deixe as ferramentas validarem.
+  A ferramenta atualizar_pedido valida automaticamente se o tamanho pedido tem cilindro de impressão disponível;
+  se não tiver, ela já ajusta para o tamanho tecnicamente mais próximo (aparece em "ajustes_feitos" no resultado).
+  Quando isso acontecer, informe ao cliente de forma transparente. NUNCA diga que um tamanho "não existe" por conta própria.
 MATERIAIS: Virgem BD (padrão) / Virgem AD (resistente) / PP (transparente) / Reciclado
-CORES DO PRODUTO (a cor da sacola em si - NÃO é a cor de impressão da logomarca, é diferente!):
+CORES DO PRODUTO (a cor da sacola em si - diferente da cor de impressão da logomarca!):
   Branca / Preta / Azul / Vermelha / Verde / Amarela / Laranja / Cinza / Transparente / Natural
-  Isso NÃO afeta o preço, é só uma característica visual do pedido. "Transparente" é o padrão se o cliente não escolher.
-ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa, pergunte a espessura SOMENTE depois de saber o produto:
+  Não afeta o preço. "Transparente" é o padrão se o cliente não escolher.
+ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa:
   - Sacola Camiseta: 0,003 / 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,028 / 0,035 / 0,045
   - Sacola Vazada, Saco Impresso Solda Fundo, Saco com Aba: 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,010 / 0,011 / 0,012 / 0,013 / 0,014 / 0,045
-  - Se o cliente não souber qual escolher, explique rapidamente: quanto maior o número, mais grossa/resistente a sacola.
 IMPRESSÃO: até 6 cores, frente e/ou verso. Clichê cobrado à parte na primeira compra.
 
-COMO APRESENTAR AS OPÇÕES — MUITO IMPORTANTE:
-- Sempre que for perguntar produto, material, cor do produto, espessura ou número de cores de impressão, apresente as opções
-  em formato de MENU NUMERADO, para o cliente só responder com o número — não faça pergunta totalmente aberta.
-- Formato padrão do menu (siga exatamente este estilo):
+COMO CONVERSAR — O NÚCLEO DE COMO VOCÊ DEVE SE COMPORTAR:
+- Você é um vendedor de verdade tendo uma conversa, não um formulário lendo perguntas em ordem fixa.
+- SEMPRE extraia TODAS as informações que o cliente já deu numa mensagem, mesmo vindo várias juntas
+  (ex: "quero sacola vazada 30x40, 40x50 e 50x50, reciclado, 3 cores frente, 30 mil cada" já te dá
+  produto, 3 tamanhos diferentes, material, impressão e quantidade de uma vez - capture tudo já).
+- Depois de capturar o que puder (chamando atualizar_pedido), pergunte SÓ o que realmente falta. Pode
+  perguntar mais de uma coisa junto quando fizer sentido (ex: "e qual material e cor você prefere?"),
+  mas evite jogar muitas perguntas de uma vez - agrupe no máximo 2-3 relacionadas por resposta.
+- NUNCA pergunte de novo algo que já está no ESTADO ATUAL DO PEDIDO (fornecido no contexto desta mensagem).
+  Se ele já mostra produto="Sacola Vazada", não pergunte de novo qual produto.
+- Exceção: se o cliente disser algo que contradiz o que já foi informado, pergunte pra esclarecer em vez
+  de simplesmente substituir sem avisar.
+
+MÚLTIPLOS TAMANHOS OU PRODUTOS NO MESMO PEDIDO:
+- Trate cada combinação de produto+tamanho como um ITEM separado na lista "itens" de atualizar_pedido.
+- Sempre mande a lista COMPLETA de itens que você já conhece (os de antes + os novos) - a ferramenta
+  substitui o estado anterior, não soma automaticamente.
+- Ao apresentar o orçamento final, mostre o preço de CADA item e depois o total geral.
+- Se um item ficar incompleto, continue perguntando só sobre ele - os outros itens já completos não
+  precisam esperar para serem calculados.
+
+TROCA DE PRODUTO NO MEIO DA CONVERSA:
+- Se o cliente trocar de produto (ex: de "Saco Impresso Solda Fundo" para "Sacola Vazada"), mantenha
+  tudo que ainda faz sentido (material, cor, quantidade, número de cores) e só pergunte de novo o que
+  realmente muda entre os produtos (espessura e tamanho têm regras próprias por produto e são
+  revalidadas automaticamente pela ferramenta).
+
+TENTE RESPONDER ANTES DE TRANSFERIR:
+- Você sabe bastante sobre produtos, preços, prazos, condições e processo - perguntas técnicas sobre
+  isso (diferença entre produtos, o que é clichê, como funciona o pedido mínimo, prazo, pagamento,
+  diferença entre materiais) você responde DIRETAMENTE, sem transferir.
+- Só use transferir_para_consultor quando a pergunta for GENUINAMENTE fora do que você sabe: reclamação,
+  status de pedido já entregue, assunto não relacionado à compra, ou pedido explícito de falar com uma
+  pessoa. Tentar responder primeiro é sempre melhor que transferir cedo demais.
+
+COMO APRESENTAR OPÇÕES DE MENU (produto, material, cor, espessura, número de cores):
+- Formato numerado:
   1. Primeira opção
   2. Segunda opção
-  3. Terceira opção
-  Depois do menu, uma linha curta tipo "Pode responder só com o número 😊".
-- Não use bullets (•) nem travessões soltos para listar opções - sempre números.
-- Aceite tanto o número quanto o nome da opção quando o cliente responder (ex: cliente pode digitar "2" ou "Sacola Vazada", os dois valem).
-- Tamanho (largura x altura) É pergunta aberta - não existe uma lista curta fixa de tamanhos, não vira menu numerado.
-- Ao perguntar a espessura, use APENAS a lista de espessuras do produto que o cliente já escolheu (nunca ofereça
-  um valor que não esteja na lista daquele produto específico). Se o cliente pedir um valor fora da lista,
-  explique que não está disponível para aquele produto e mostre de novo as opções válidas dele (também em menu numerado).
+  Depois, uma linha curta tipo "Pode responder só com o número 😊".
+- Não use bullets (•) nem travessões soltos - sempre números.
+- Aceite tanto o número quanto o nome quando o cliente responder.
+- Tamanho (largura x altura) é pergunta aberta, não vira menu numerado.
 
-QUANDO VOCÊ NÃO SOUBER RESPONDER — MUITO IMPORTANTE:
-- Se o cliente perguntar algo fora do que você sabe (fora de vendas de sacolas/sacos plásticos), ou pedir
-  claramente para falar com uma pessoa/atendente humano, ou você não conseguir ajudar de alguma forma
-  depois de tentar, NÃO invente uma resposta e NÃO fique repetindo a mesma coisa.
-- Nesse caso, chame a ferramenta transferir_para_consultor, e avise o cliente de forma simpática que um
-  consultor da equipe vai assumir a conversa em breve (ex: "Essa pergunta é melhor respondida por alguém
-  da nossa equipe - já vou encaminhar você para um consultor, tá bem?").
+PRIVACIDADE E DADOS PESSOAIS (LGPD):
+- Guardamos telefone, nome e histórico da conversa, só para atender bem e gerar orçamento.
+- Na PRIMEIRA mensagem desta conversa (indicado no contexto), inclua no final da resposta, de forma
+  curta e natural: "Ah, e só pra constar: guardo nossa conversa aqui pra te atender melhor - se quiser
+  saber mais sobre isso ou pedir pra apagar em algum momento, é só falar 😊"
+- Pedido de ver/corrigir/apagar dados → chame solicitar_privacidade (nunca prometa que já apagou nada).
 
-FERRAMENTAS — MUITO IMPORTANTE:
-- Você tem 4 ferramentas: consultar_pedido_minimo, calcular_orcamento, fechar_pedido e transferir_para_consultor.
-- Você NUNCA calcula, estima ou "arredonda" preço ou pedido mínimo por conta própria, nem "proporcionalmente".
-  Todo número de preço ou quantidade mínima DEVE vir de uma dessas ferramentas.
-- Assim que souber produto + largura + altura + espessura + cores, chame consultar_pedido_minimo ANTES de
-  perguntar a quantidade ao cliente, para já informar o mínimo real dessa combinação (nunca diga "30 mil" de
-  forma genérica - cada combinação tem seu próprio mínimo, baseado em peso).
-- Assim que tiver produto + material + tamanho + espessura + cores + impressão + quantidade, chame
-  calcular_orcamento para obter o preço final antes de informar qualquer valor ao cliente.
-- Se uma ferramenta devolver "erro", NÃO informe nenhum valor nem invente um número - siga a instrução
-  que vier junto do erro (normalmente: pedir mais informação, aumentar quantidade, ou avisar que vai
-  confirmar com a equipe).
-- Assim que o cliente confirmar claramente que quer fechar o pedido (depois de você já ter apresentado um
-  preço via calcular_orcamento), chame fechar_pedido com um resumo do pedido.
+FERRAMENTAS:
+- atualizar_pedido: chame toda vez que aprender QUALQUER dado novo (mesmo parcial, mesmo vários de
+  uma vez). É o que mantém sua memória estruturada - sempre mande a lista completa de itens conhecidos.
+- consultar_pedido_minimo: opcional, útil pra confirmar o mínimo de um item antes dele estar completo
+  (atualizar_pedido já mostra isso no preview de cada item quando aplicável).
+- calcular_orcamento: chame para obter o PREÇO OFICIAL FINAL de um item completo, antes de apresentar
+  qualquer valor ao cliente como definitivo. Nunca invente ou estime preço por conta própria.
+- fechar_pedido: chame quando o cliente confirmar que quer fechar (depois de já ver o preço oficial).
+- transferir_para_consultor: só depois de tentar responder você mesmo.
+- solicitar_privacidade: pedidos relacionados a dados pessoais (LGPD).
+- Se uma ferramenta devolver "erro", NÃO informe nenhum valor - siga a instrução que vier junto do erro.
 
 CONDIÇÕES:
-- Pedido mínimo: NÃO é um número fixo — sempre calculado pela ferramenta consultar_pedido_minimo ou calcular_orcamento.
+- Pedido mínimo: NÃO é fixo — sempre calculado pelas ferramentas, varia por peso de cada item.
 - Prazo: 30 a 40 dias úteis após aprovação da arte
 - Frete: FOB Curitiba-PR ou CIF negociado
 - Pagamento: 28 dias ou 28/56 dias
 - Validade da proposta: 7 dias
+- Clichê: cobrado à parte na primeira compra (valor confirmado pela equipe, não calculado automaticamente)
 
-FORMATAÇÃO DE MENSAGENS — MUITO IMPORTANTE:
-- O WhatsApp NÃO entende tabelas em Markdown (símbolos | e ---). NUNCA use esse formato -
-  ele aparece quebrado, cheio de barras verticais, nada profissional.
-- O WhatsApp entende: *negrito* (um asterisco de cada lado), _itálico_ (underline), e quebras de linha normais.
-- Ao apresentar o orçamento final (depois de calcular_orcamento), use este formato, com quebras de linha
-  e negrito nos rótulos, SEM tabela:
+FORMATAÇÃO DE MENSAGENS:
+- O WhatsApp NÃO entende tabelas em Markdown (símbolos | e ---). NUNCA use esse formato.
+- O WhatsApp entende: *negrito* (um asterisco de cada lado) e quebras de linha normais.
+- Ao apresentar o orçamento final de UM item, use:
 
 *Orçamento Plastcustom* 🎉
 
@@ -572,28 +720,16 @@ Prazo de 30 a 40 dias úteis após aprovação da arte. Pagamento em 28 dias ou 
 
 Posso gerar a proposta para você?
 
-FLUXO DE VENDA:
-1. Cumprimente e pergunte o tipo de negócio
-2. Pergunte qual produto precisa (apresente as opções)
-3. Pergunte o tamanho (largura x altura em cm) - pergunta aberta, não é lista fixa
-4. Pergunte o material (apresente as opções: Virgem BD - padrão / Virgem AD - resistente / PP - transparente / Reciclado)
-5. Pergunte a cor do produto (apresente as opções: Branca / Preta / Azul / Vermelha / Verde / Amarela / Laranja / Cinza / Transparente / Natural)
-6. Pergunte a espessura, usando a lista específica do produto já escolhido, explicando as faixas e sugerindo com base no uso do cliente
-7. Pergunte sobre impressão, número de cores e logo (isso precisa vir ANTES da quantidade, pois o pedido mínimo depende de ter ou não impressão)
-8. Chame consultar_pedido_minimo e informe o mínimo real, depois pergunte a quantidade em MIL unidades
-9. Chame calcular_orcamento e apresente o preço com confiança
-10. Feche: Posso gerar a proposta para você?
-11. Quando confirmar, chame fechar_pedido e diga: Perfeito! Estou passando seus dados para nosso consultor finalizar. Em breve entrarão em contato!
+- Se houver MAIS DE UM item, liste cada um nesse formato (de forma compacta) e feche com *Total geral:* R$ [soma].
 
 OBJEÇÕES:
 - Tá caro: mostre custo por unidade e sugira quantidade maior
 - Vou pensar: Posso segurar esse preço por 7 dias
-- Pouco: explique o pedido mínimo real daquela combinação (calculado pela ferramenta, não um número fixo)
+- Pouco: explique o pedido mínimo real daquele item (calculado pela ferramenta)
 
-REGRAS:
-- Uma pergunta por vez
-- Máximo 3 parágrafos
-- Tom confiante direto e profissional"""
+REGRAS GERAIS:
+- Máximo 3-4 parágrafos por resposta
+- Tom confiante, direto, natural - como um vendedor experiente, não um script"""
 
 SINAIS = {
     "perguntou_preco": (["preço","valor","custa","quanto","tabela"], 20),
@@ -672,6 +808,51 @@ def buscar_ou_criar_conversa(cliente_id):
     cur.close(); release_db(db)
     return dict(c)
 
+def obter_estado_pedido(conversa_id):
+    """Lê a memória estruturada do pedido (produto/tamanho/material/etc, podendo ter
+    vários itens) salva no banco. Se a coluna ainda não existir (ver instruções de
+    migração), volta um estado vazio em vez de quebrar - o robô continua funcionando,
+    só sem a memória persistente até a coluna ser criada."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("SELECT estado_pedido FROM conversas WHERE id=%s", (conversa_id,))
+        row = cur.fetchone()
+        estado = row["estado_pedido"] if row else None
+        return estado if estado else {"itens": [], "observacoes": ""}
+    except psycopg2.Error:
+        db.rollback()
+        return {"itens": [], "observacoes": ""}
+    finally:
+        cur.close(); release_db(db)
+
+def salvar_estado_pedido(conversa_id, estado):
+    db = get_db()
+    cur = db.cursor()
+    try:
+        cur.execute("UPDATE conversas SET estado_pedido=%s WHERE id=%s", (Json(estado), conversa_id))
+        db.commit()
+    except psycopg2.Error as e:
+        db.rollback()
+        logger.warning(f"Não foi possível salvar estado_pedido (a coluna pode não existir ainda no banco): {e}")
+    finally:
+        cur.close(); release_db(db)
+
+def marcar_conversa_fechada(conversa_id):
+    """Depois que um pedido fecha, a conversa não fica mais 'ativa' - assim, se o mesmo
+    cliente mandar mensagem de novo no futuro (um pedido novo), ele começa com uma
+    memória de pedido limpa, em vez de arrastar o pedido antigo já fechado."""
+    db = get_db()
+    cur = db.cursor()
+    try:
+        cur.execute("UPDATE conversas SET status='fechada' WHERE id=%s", (conversa_id,))
+        db.commit()
+    except psycopg2.Error as e:
+        db.rollback()
+        logger.warning(f"Não foi possível marcar conversa como fechada: {e}")
+    finally:
+        cur.close(); release_db(db)
+
 def salvar_mensagem(conversa_id, remetente, conteudo):
     db = get_db()
     cur = db.cursor()
@@ -734,6 +915,32 @@ def notificar_proprietario(cliente, score, conversa_id):
     msg = f"LEAD QUENTE PLASTCUSTOM\n\nCliente: {nome}\nTelefone: +{cliente['telefone']}\nScore: {score}%\n\nCliente pronto para fechar! Entre em contato agora."
     enviar_whatsapp(PROPRIETARIO, msg)
     cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'lead_quente')", (cliente["id"], conversa_id))
+    db.commit(); cur.close(); release_db(db)
+
+def notificar_privacidade(cliente, conversa_id, tipo, detalhe):
+    """Avisa o responsável (você) sobre um pedido relacionado a dados pessoais (LGPD) -
+    acesso, correção, exclusão ou dúvida. NÃO apaga nada automaticamente: pedidos de
+    exclusão precisam ser tratados por um humano, com cuidado, já que envolvem dados
+    de negócio (histórico de conversa, negociação de preço, etc)."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "SELECT id FROM notificacoes WHERE conversa_id=%s AND tipo='privacidade' AND enviada_em > NOW() - INTERVAL '24 hours'",
+        (conversa_id,)
+    )
+    if cur.fetchone():
+        cur.close(); release_db(db); return
+    nome = cliente.get("nome") or cliente["telefone"]
+    rotulo = {"acesso": "QUER VER OS DADOS", "correcao": "QUER CORRIGIR DADOS", "exclusao": "QUER EXCLUIR DADOS (LGPD)", "duvida": "DÚVIDA SOBRE PRIVACIDADE"}.get(tipo, tipo.upper())
+    msg = (
+        f"PEDIDO DE PRIVACIDADE - {rotulo}\n\n"
+        f"Cliente: {nome}\n"
+        f"Telefone: +{cliente['telefone']}\n\n"
+        f"Detalhe: {detalhe}\n\n"
+        "Trate esse pedido diretamente com o cliente (a LGPD pede resposta em prazo razoável)."
+    )
+    enviar_whatsapp(CONSULTOR_TELEFONE, msg)
+    cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'privacidade')", (cliente["id"], conversa_id))
     db.commit(); cur.close(); release_db(db)
 
 def notificar_transferencia(cliente, conversa_id, motivo):
@@ -813,15 +1020,28 @@ def webhook():
             messages.append({"role": role, "content": m["conteudo"]})
         messages.append({"role": "user", "content": mensagem})
 
+        # Se não há nenhuma mensagem anterior nesta conversa, é o primeiro contato -
+        # a IA deve incluir a nota curta de privacidade (LGPD) na resposta.
+        system_prompt_final = SYSTEM_PROMPT
+        if not historico[:-1]:
+            system_prompt_final += "\n\nCONTEXTO: esta é a PRIMEIRA mensagem desta conversa - inclua a nota curta de privacidade no final da sua resposta, como instruído acima."
+
+        # Injeta a memória estruturada do pedido (persistida no banco) diretamente no
+        # contexto - assim a IA tem uma fonte confiável do que já foi informado, em vez
+        # de precisar reler e "adivinhar" a partir do texto cru da conversa toda vez.
+        estado_atual = obter_estado_pedido(conversa["id"])
+        if estado_atual.get("itens"):
+            system_prompt_final += "\n\nESTADO ATUAL DO PEDIDO (já confirmado nesta conversa - NÃO pergunte de novo o que já está aqui):\n" + json.dumps(estado_atual, ensure_ascii=False)
+
         # === Uma única "conversa" com a IA, que pode chamar ferramentas quando precisar ===
         # (antes eram sempre 2 chamadas de IA por mensagem: uma pra extrair dados, outra pra responder.
         # Agora é 1 chamada normalmente, e só usa uma 2ª quando a IA realmente precisa calcular algo.)
         resposta_final = None
-        for _ in range(4):  # limite de segurança contra loop infinito de ferramentas
+        for _ in range(6):  # limite de segurança contra loop infinito de ferramentas
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=800,
-                system=SYSTEM_PROMPT,
+                system=system_prompt_final,
                 tools=TOOLS,
                 messages=messages,
             )
@@ -836,16 +1056,22 @@ def webhook():
             for bloco in response.content:
                 if bloco.type != "tool_use":
                     continue
-                if bloco.name == "consultar_pedido_minimo":
+                if bloco.name == "atualizar_pedido":
+                    resultado = executar_atualizar_pedido(conversa["id"], bloco.input)
+                elif bloco.name == "consultar_pedido_minimo":
                     resultado = executar_consultar_pedido_minimo(bloco.input)
                 elif bloco.name == "calcular_orcamento":
                     resultado = executar_calcular_orcamento(bloco.input)
                 elif bloco.name == "fechar_pedido":
                     notificar_pedido_fechado(cliente, conversa["id"], bloco.input.get("resumo", ""))
-                    resultado = {"ok": True, "mensagem": "Consultor notificado com sucesso."}
+                    marcar_conversa_fechada(conversa["id"])
+                    resultado = {"ok": True, "mensagem": "Consultor notificado com sucesso. Esta conversa foi concluída - uma próxima mensagem do cliente inicia um pedido novo."}
                 elif bloco.name == "transferir_para_consultor":
                     notificar_transferencia(cliente, conversa["id"], bloco.input.get("motivo", ""))
                     resultado = {"ok": True, "mensagem": "Consultor avisado, vai assumir a conversa em breve."}
+                elif bloco.name == "solicitar_privacidade":
+                    notificar_privacidade(cliente, conversa["id"], bloco.input.get("tipo", "duvida"), bloco.input.get("detalhe", ""))
+                    resultado = {"ok": True, "mensagem": "Pedido registrado, a equipe vai tratar diretamente com o cliente."}
                 else:
                     resultado = {"erro": f"ferramenta desconhecida: {bloco.name}"}
                 resultados_tools.append({
@@ -868,6 +1094,60 @@ def webhook():
 
         return jsonify({"ok": True, "resposta": resposta, "score": lead["score"], "categoria": lead["categoria"]})
     except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+def limpar_dados_antigos(meses=12, modo_teste=True):
+    """Remove (ou só relata, se modo_teste=True) dados de clientes cuja conversa está
+    inativa há mais de `meses` meses E que NUNCA resultou em pedido fechado. Pedidos
+    fechados são preservados (motivo de negócio: histórico de vendas). A ordem de
+    exclusão respeita as dependências entre tabelas (mensagens antes de conversas, etc)."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT c.id AS conversa_id, c.cliente_id, cl.telefone
+        FROM conversas c
+        JOIN clientes cl ON cl.id = c.cliente_id
+        WHERE c.ultima_mensagem < NOW() - (%s || ' months')::INTERVAL
+          AND NOT EXISTS (
+              SELECT 1 FROM notificacoes n
+              WHERE n.conversa_id = c.id AND n.tipo = 'pedido_fechado'
+          )
+    """, (meses,))
+    alvos = cur.fetchall()
+
+    if modo_teste:
+        cur.close(); release_db(db)
+        return {"modo": "teste", "conversas_que_seriam_removidas": len(alvos),
+                "telefones": [a["telefone"] for a in alvos]}
+
+    removidos = 0
+    for alvo in alvos:
+        cur.execute("DELETE FROM mensagens WHERE conversa_id=%s", (alvo["conversa_id"],))
+        cur.execute("DELETE FROM leads WHERE conversa_id=%s", (alvo["conversa_id"],))
+        cur.execute("DELETE FROM notificacoes WHERE conversa_id=%s", (alvo["conversa_id"],))
+        cur.execute("DELETE FROM conversas WHERE id=%s", (alvo["conversa_id"],))
+        cur.execute("DELETE FROM clientes WHERE id=%s", (alvo["cliente_id"],))
+        removidos += 1
+    db.commit()
+    cur.close(); release_db(db)
+    logger.info(f"Limpeza de dados antigos (LGPD): {removidos} clientes/conversas removidos (inativos há mais de {meses} meses, sem pedido fechado)")
+    return {"modo": "executado", "conversas_removidas": removidos}
+
+@app.route("/manutencao/limpeza", methods=["POST"])
+def manutencao_limpeza():
+    """Endpoint protegido para a limpeza periódica de dados antigos (LGPD).
+    Por padrão roda em modo de TESTE (não apaga nada) - só passa a apagar de
+    verdade se o corpo da requisição incluir {"modo": "executar"}."""
+    if request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
+        return jsonify({"erro": "não autorizado"}), 401
+    data = request.get_json(silent=True) or {}
+    meses = data.get("meses", 12)
+    modo_teste = data.get("modo") != "executar"
+    try:
+        resultado = limpar_dados_antigos(meses=meses, modo_teste=modo_teste)
+        return jsonify(resultado)
+    except Exception as e:
+        logger.error(f"Erro na limpeza de dados antigos: {e}")
         return jsonify({"erro": str(e)}), 500
 
 @app.route("/health", methods=["GET"])
