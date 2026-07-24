@@ -1,0 +1,1590 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<title>Plastcustom - Orçamento Revendedor</title>
+<style>
+  :root{
+    --bg:#0a1628;
+    --bg-soft:#0f1e38;
+    --bg-glass:rgba(255,255,255,.06);
+    --ink:#eaf4ff;
+    --ink-2:#b9c7de;
+    --brand:#e8420a;
+    --brand2:#ff7043;
+    --ok-top:rgba(15,102,70,0.85);
+    --ok-bot:rgba(8,68,46,0.70);
+    --radius:16px;
+    --shadow:0 18px 60px rgba(0,0,0,.45);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(135deg,#080f1e 0%,#0c1628 40%,#080f1e 100%);font:500 15px/1.55 Inter,system-ui,Segoe UI,Roboto,Arial;color:var(--ink)}
+  .wrap{max-width:1260px;margin:auto;padding:22px}
+  .header{display:flex;align-items:center;justify-content:center;gap:16px;margin:8px 0 18px;text-align:center}
+  .header-logo-text{display:flex;flex-direction:column;align-items:center;gap:4px}
+  .logo-text{font-size:38px;font-weight:900;letter-spacing:-1px;background:linear-gradient(90deg,var(--brand),var(--brand2));-webkit-background-clip:text;background-clip:text;color:transparent;line-height:1}
+  .logo-sub{font-size:11px;letter-spacing:.22em;color:#b9c7de;text-transform:uppercase;font-weight:600}
+  .title h1{margin:0;font-size:22px;letter-spacing:.3px;color:#e6f2ff}
+  /* Cards */
+  .grid{display:grid;gap:18px}
+  .cols-3{grid-template-columns:1.25fr 1fr 1fr}
+  .cols-4{grid-template-columns:1.25fr 1fr 1fr 0.8fr}
+  @media(max-width:1100px){.cols-3{grid-template-columns:1fr}.cols-4{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.14);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px}
+  .card{position:relative}
+  .nota-mini{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+  .card>.nota-mini-dados{position:absolute;top:17px;right:18px;z-index:1}
+  .nota-mini label{margin:0;font-size:9px;letter-spacing:.08em;color:#86a4c9}
+  .nota-mini select{width:auto;min-width:88px;padding:5px 22px 5px 8px;border-radius:999px;border:1px solid rgba(232,66,10,.28);background:#071326;color:#dcefff;font-size:11px;line-height:1;font-weight:800}
+  .nota-mini select:focus{border-color:var(--brand);box-shadow:0 0 0 2px rgba(232,66,10,.18)}
+  .nota-mini select.select-alert{background:#1f1a0b !important;border-color:#eab308 !important;color:#fff7c2 !important;box-shadow:0 0 0 1px rgba(234,179,8,.18) !important}
+  .nota-mini select.select-alert:focus{border-color:#eab308 !important;box-shadow:0 0 0 2px rgba(234,179,8,.22) !important}
+  h2{margin:0 0 10px;font-size:18px;color:#e6f2ff}
+  label{display:block;font-size:12px;color:var(--ink-2);text-transform:uppercase;letter-spacing:.08em;margin:0 0 6px}
+  input,select,button{width:100%;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,.16);background:#0f1c34;color:var(--ink)}
+  input:focus,select:focus{border-color:var(--brand);outline:none;box-shadow:0 0 0 3px rgba(232,66,10,.22)}
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px;align-items:end}
+  @media(max-width:800px){.form-grid{grid-template-columns:1fr}}
+  .pair{display:flex;flex-direction:column}
+  .line{display:flex;justify-content:space-between;gap:16px;padding:10px 6px;border-bottom:1px dashed rgba(255,255,255,.14)}
+  .line:last-child{border-bottom:none}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .money-edit{display:flex;align-items:center;gap:6px}
+  .fkg-input{width:82px;padding:6px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.18);background:#0a162c;color:var(--ink);text-align:right}
+  .fkg-input:focus{border-color:var(--brand);outline:none;box-shadow:0 0 0 3px rgba(232,66,10,.22)}
+  .price-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+  .price-grid .line{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:48px}
+  .price-grid .line > :first-child{flex:1 1 auto;min-width:0;white-space:normal;line-height:1.2;font-size:14px}
+  .price-grid .line > :last-child{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:flex-end;min-width:96px;white-space:nowrap;text-align:right;font-size:14px}
+  .price-grid .money-edit{gap:4px;min-width:96px}
+  .price-grid .fkg-input{width:72px;padding:4px 6px;font-size:14px}
+  @media(max-width:800px){.price-grid{grid-template-columns:1fr}}
+  .block{border-radius:14px;border:1px solid rgba(255,255,255,.16);background:#0f1c34;padding:10px}
+  .block.green{background:linear-gradient(180deg,var(--ok-top),var(--ok-bot));border:1px solid rgba(27,138,95,.80);box-shadow:0 0 24px rgba(27,138,95,.35)}
+  .block.cliche{background:linear-gradient(180deg,rgba(232,66,10,.15),rgba(255,112,67,.08));border:1px solid rgba(232,66,10,.40);box-shadow:0 0 24px rgba(232,66,10,.20)}
+  .metric-block{margin-top:10px}
+  .metric-block.real{background:linear-gradient(180deg,rgba(27,138,95,.24),rgba(15,102,70,.12));border-color:rgba(27,138,95,.55)}
+  .metric-block-title{margin:0 0 4px;padding:0 6px 4px;font-size:12px;color:#ffb8a0;text-transform:uppercase;letter-spacing:.08em;font-weight:900}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .btn{cursor:pointer;border:none;background:linear-gradient(180deg,var(--ok-top),var(--ok-bot));color:#fff;font-weight:700;letter-spacing:.2px;border-radius:12px;padding:12px 14px;box-shadow:0 0 18px rgba(27,138,95,.35)}
+  .btn.secondary{background:#0f1c34;border:1px solid rgba(255,255,255,.14);font-weight:600}
+  .btn.orange{background:linear-gradient(180deg,rgba(232,66,10,.85),rgba(180,40,5,.70));box-shadow:0 0 18px rgba(232,66,10,.35)}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);opacity:0;transition:.25s ease;z-index:9999;background:#0f1c34;border:1px solid rgba(255,255,255,.2);padding:10px 14px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.45)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast.regra-toast-modal{top:50%;left:50%;bottom:auto;transform:translate(-50%, -50%) scale(.95);background:rgba(8,14,28,.96);border:2px solid rgba(245,158,11,.85);color:#f8fafc;font-size:16px;padding:18px 24px;border-radius:14px;box-shadow:0 18px 45px rgba(0,0,0,.55);max-width:min(92vw, 560px);text-align:center;line-height:1.35}
+  .toast.regra-toast-modal.show{animation:toastFadeScaleIn .22s ease-out both}
+  @keyframes toastFadeScaleIn{from{opacity:0;transform:translate(-50%, -50%) scale(.95)}to{opacity:1;transform:translate(-50%, -50%) scale(1)}}
+  .modal{position:fixed;inset:0;background:rgba(2,8,18,.65);display:none;place-items:center;z-index:9998}
+  .modal.show{display:grid}
+  .modal-card{width:min(920px,92vw);max-height:86vh;overflow:auto;background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.04));border:1px solid rgba(255,255,255,.18);border-radius:18px;box-shadow:var(--shadow);padding:16px}
+  .modal-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
+  .modal-head h3{margin:0;font-size:18px}
+  .proposal{white-space:pre-wrap;background:#0f1c34;border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:14px;min-height:180px}
+  footer{margin:24px 0 12px;text-align:center;color:var(--ink-2);font-size:12px}
+  .top{position:fixed;right:18px;bottom:20px;z-index:9000}
+  .top button{width:44px;height:44px;border-radius:50%;background:var(--brand);color:#fff;font-size:18px;cursor:pointer;border:none;opacity:0;transition:.3s;box-shadow:0 4px 18px rgba(232,66,10,.4)}
+  .alert{background:rgba(255,59,48,.12);border:1px solid rgba(255,59,48,.40);border-radius:12px;padding:12px;font-size:13px;color:#ff6b6b;margin-top:10px;display:none}
+  .alert.info{background:rgba(232,66,10,.12);border-color:rgba(232,66,10,.40);color:#ffb8a0}
+  #alertaCilindro{margin-top:8px;padding:9px 10px;background:rgba(232,66,10,.08);border-color:rgba(232,66,10,.22);color:#ffd7c8}
+  .cilindro-alert{display:grid;gap:6px}
+  .cilindro-alert-head{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap}
+  .cilindro-alert-title{font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:#ffd7c8}
+  .cilindro-alert-sub{margin-top:1px;font-size:10px;line-height:1.15;color:#e8c4b8}
+  .cilindro-alert-badge{display:inline-flex;align-items:center;justify-content:center;padding:2px 6px;border-radius:999px;font-size:9px;font-weight:900;letter-spacing:.04em;white-space:nowrap}
+  .alert.info .cilindro-alert-badge{background:rgba(232,66,10,.18);border:1px solid rgba(232,66,10,.35);color:#ffd6d0}
+  .alert:not(.info) .cilindro-alert-badge{background:rgba(255,107,107,.14);border:1px solid rgba(255,107,107,.28);color:#ffd6d6}
+  .cilindro-alert-meta{display:flex;flex-wrap:wrap;gap:5px}
+  .cilindro-alert-meta span{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:999px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);font-size:9.5px;line-height:1.1;color:#eef7ff}
+  .cilindro-alert-meta b{color:#ffffff}
+  .cilindro-alert-table-wrap{overflow:hidden;border-radius:7px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.02)}
+  .cilindro-alert-table{width:100%;min-width:0;border-collapse:collapse;table-layout:fixed}
+  .cilindro-alert-table th{padding:5px 6px;background:rgba(255,255,255,.045);font-size:8.5px;font-weight:900;letter-spacing:.05em;text-transform:uppercase;color:#ffd7c8;text-align:left}
+  .cilindro-alert-table td{padding:5px 6px;border-top:1px solid rgba(255,255,255,.05);font-size:10px;vertical-align:top;color:#ffffff}
+  .cilindro-alert-table th:nth-child(1),.cilindro-alert-table td:nth-child(1){width:44px;text-align:center}
+  .cilindro-alert-table th:nth-child(2),.cilindro-alert-table td:nth-child(2){width:62px;text-align:center}
+  .cilindro-alert-table th:nth-child(3),.cilindro-alert-table td:nth-child(3){width:74px;text-align:center}
+  .cilindro-alert-table td.muted{color:#c5d7eb}
+  .cilindro-alert-table tr.cilindro-row-best td{background:rgba(27,138,95,.10);box-shadow:inset 0 1px 0 rgba(27,138,95,.12)}
+  .cilindro-alert-table tr.cilindro-row-best td:first-child strong{color:#9ff2ca}
+  .cilindro-best-chip{background:rgba(27,138,95,.16) !important;border-color:rgba(27,138,95,.36) !important;color:#b6ffdc !important}
+  .cilindro-reco-chip{background:rgba(255,193,7,.14) !important;border-color:rgba(255,193,7,.30) !important;color:#ffe28a !important}
+  .cilindro-best-tag{display:inline-flex;align-items:center;padding:1px 5px;border-radius:999px;background:rgba(27,138,95,.18);border:1px solid rgba(27,138,95,.34);color:#aaf5cf;font-size:8px;font-weight:900;letter-spacing:.04em;line-height:1;white-space:nowrap}
+  .cilindro-obs-cell{display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%}
+  .cilindro-obs-text{min-width:0}
+  .cilindro-status{display:inline-flex;align-items:center;justify-content:center;padding:2px 6px;border-radius:999px;font-size:9px;font-weight:900;line-height:1.05;white-space:nowrap}
+  .cilindro-status.ok{background:rgba(27,138,95,.18);border:1px solid rgba(27,138,95,.38);color:#99f0c4}
+  .cilindro-status.limit{background:rgba(255,193,7,.16);border:1px solid rgba(255,193,7,.34);color:#ffe28a}
+  .cilindro-status.off{background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.28);color:#ffcbcb}
+  .cilindro-alert-note{font-size:9px;line-height:1.1;color:#c8dcee}
+  .cor-item{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:8px}
+  .cor-item h3{margin:0 0 6px;text-align:center;color:var(--brand2);font-size:12px}
+  .pistas-row{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+  .pair-pistas-inline{grid-column:1 / -1}
+  .alert-pistas-verso{display:none;margin:0;padding:8px 10px;border-radius:10px;border:1px solid rgba(232,66,10,.40);background:rgba(232,66,10,.12);color:#ffb8a0;font-size:12px;line-height:1.35;white-space:nowrap}
+  #coresAreas{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:900px){#coresAreas{grid-template-columns:repeat(2,1fr)}.wrap{padding:14px}.card{padding:14px}input,select,button{font-size:15px;padding:10px}.btn{padding:11px 13px;font-size:15px}.modal-card{width:95vw;padding:12px}}
+  @media(max-width:600px){#coresAreas{grid-template-columns:1fr}}
+  section.grid{padding:0 22px}
+  @media(max-width:900px){section.grid{padding:0 14px}}
+  /* Badge da empresa */
+  .company-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(232,66,10,.12);border:1px solid rgba(232,66,10,.30);border-radius:999px;padding:4px 14px 4px 10px;margin-bottom:10px}
+  .company-badge-dot{width:8px;height:8px;border-radius:50%;background:var(--brand);box-shadow:0 0 8px var(--brand)}
+  .company-badge-txt{font-size:11px;font-weight:700;letter-spacing:.08em;color:#ffb8a0;text-transform:uppercase}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div class="header">
+  <div class="header-logo-text">
+    <div class="logo-text">PLASTCUSTOM</div>
+    <div class="logo-sub">Soluções em Plásticos</div>
+  </div>
+</div>
+<div style="text-align:center;margin-bottom:18px">
+  <div class="company-badge">
+    <div class="company-badge-dot"></div>
+    <span class="company-badge-txt">Sistema de Orçamento — Revendedor</span>
+  </div>
+</div>
+</div>
+
+<section class="grid cols-4">
+<!-- ESQUERDA: ENTRADAS -->
+<div class="card">
+<h2>Dados para Cálculo</h2>
+<div class="nota-mini nota-mini-dados">
+  <label for="tipoNotaPavao">NF</label>
+  <select id="tipoNotaPavao" title="Tabela de fator kg">
+    <option value="com_nf" selected>C/N</option>
+    <option value="sem_nf">S/N</option>
+  </select>
+</div>
+<div class="form-grid">
+<div class="pair"><label>Produto</label>
+<select id="produto">
+<option>Sacola Camiseta</option>
+<option>Sacola Vazada</option>
+<option>Saco Impresso</option>
+<option>Saco para Gelo</option>
+<option>Saco Impresso Solda Fundo</option>
+<option>Saco com Aba</option>
+<option>Bobina Tubular</option>
+<option>Bobina Folha</option>
+</select>
+</div>
+<div class="pair" id="sacoGeloWrap" style="display:none">
+  <label>Tamanho do Gelo</label>
+  <select id="sacoGeloKg">
+    <option value="2">2 kg</option>
+    <option value="3">3 kg</option>
+    <option value="4">4 kg</option>
+    <option value="5">5 kg</option>
+  </select>
+</div>
+<div class="pair"><label>Cor do Produto</label>
+<select id="corProduto">
+<option>Branca</option><option>Preta</option><option>Azul</option><option>Vermelha</option><option>Verde</option>
+<option>Amarela</option><option>Laranja</option><option>Cinza</option><option>Transparente</option><option>Natural</option>
+<option>Rosa</option><option>Roxa</option><option>Marrom</option><option>Bege</option><option>Dourada</option>
+</select>
+</div>
+<div class="pair"><label>Largura (cm)</label><input id="largura" step="0.1" type="number" value="30"/></div>
+<div class="pair" id="alturaWrap"><label>Altura (cm)</label><input id="altura" step="0.1" type="number" value="40"/></div>
+<div class="pair" id="abaWrap" style="display:none">
+  <label>Aba (cm) (medida total)</label>
+  <select id="abaSel">
+    <option value="2">2 cm</option>
+    <option value="3">3 cm</option>
+    <option value="4" selected>4 cm</option>
+    <option value="5">5 cm</option>
+    <option value="6">6 cm</option>
+    <option value="8">8 cm</option>
+    <option value="10">10 cm</option>
+    <option value="custom">Outro…</option>
+  </select>
+  <input id="abaCustom" type="number" step="0.1" min="0" placeholder="Digite a aba (cm)" style="margin-top:8px;display:none"/>
+</div>
+<div class="pair" id="fitaWrap" style="display:none">
+  <label>Fita</label>
+  <select id="fitaSel">
+    <option value="nenhuma" selected>Sem</option>
+    <option value="auto">Fita auto colante</option>
+    <option value="inviolavel">Fita inviolável</option>
+  </select>
+</div>
+<div class="pair"><label>Espessura (mm)</label><input id="esp" min="0.001" step="0.001" type="number" value="0.028"/></div>
+<div class="pair" id="milheirosWrap"><label>Milheiros (x1000 un)</label><input id="milheiros" min="0.5" step="0.5" type="number" value="30"/></div>
+<div class="pair" id="metrosWrap" style="display:none"><label>Metros</label><input id="metros" min="0" step="1" type="number" value="0"/></div>
+<div class="pair"><label>Material (para proposta)</label>
+<select id="materialExibe">
+<option>Polietileno (PEAD)</option>
+<option>Polietileno (PEBD)</option>
+<option>Polietileno Biodegradável</option>
+<option>Polietileno</option>
+<option>Reciclado Cor</option>
+<option>Reciclado Sem Cor</option>
+<option>Polipropileno (PP)</option>
+</select>
+</div>
+<div class="pair"><label>Personalização (nº de cores)</label><select id="coresNum"></select></div>
+<div class="pair"><label>Tipo de Impressão</label>
+<select id="imp">
+<option>IMPRESSÃO FRENTE</option>
+<option>IMPRESSÃO FRENTE / VERSO</option>
+</select>
+</div>
+<div class="pair"><label>Acréscimo</label><select id="acresc"></select></div>
+<div class="pair">
+  <label>&nbsp;</label>
+  <button class="btn secondary" type="button" id="btnResetFreteAcresc">Zerar acréscimo</button>
+</div>
+<div class="pair">
+  <label>&nbsp;</label>
+  <button class="btn secondary" type="button" id="btnTabelaCilindros">Ver Tabela de Cilindros (PDF)</button>
+</div>
+</div>
+</div>
+
+<!-- CÁLCULO DE CLICHÊ -->
+<div class="card">
+<h2>Cálculo de Clichê</h2>
+<div class="form-grid">
+<div class="pair pair-pistas-inline">
+    <label>Nº de pistas</label>
+    <div class="pistas-row">
+      <input id="pistas" min="1" step="1" type="number" value="1" style="width:60px;"/>
+      <div class="alert-pistas-verso" id="alertaPistasVerso" title="Frente/verso selecionado: lembrete para duplicar as pistas do clichê.">
+         Frente/verso selecionado
+      </div>
+    </div>
+</div>
+<div class="pair" style="grid-column: 1 / -1">
+    <label>Áreas por cor</label>
+    <div class="grid cols-4" id="coresAreas"></div>
+</div>
+</div>
+<div class="line" style="display:none"><span>Preço por cm²</span><span class="mono">R$ 0,17</span></div>
+<div class="line" style="display:none"><span>Área total (cm²)</span><span class="mono" id="areaCliche">0</span></div>
+<div class="line"><span>Cores</span><span class="mono" id="coresCliche">0</span></div>
+<div class="line"><span>Pistas</span><span class="mono" id="pistasCliche">1</span></div>
+<div class="block cliche">
+<div class="line"><span>Valor do Clichê</span><span class="mono" id="resultadoCliche">R$ 0,00</span></div>
+</div>
+<div class="alert info" id="alertaCilindro"></div>
+</div>
+
+<!-- MEIO: CÁLCULOS AUTOMÁTICOS -->
+<div class="card">
+<h2>Cálculos Automáticos</h2>
+<div class="line" style="display:none"><span>Área (cm²)</span><span class="mono" id="kArea">0</span></div>
+<div class="line" style="display:none"><span>Volume por Produto (cm³)</span><span class="mono" id="kVol">0</span></div>
+<div class="block metric-block">
+  <div class="metric-block-title">Pesos Totais</div>
+  <div class="line"><span>Peso por Unidade (g)</span><span class="mono" id="kPU">0</span></div>
+  <div class="line"><span>Peso do Milheiro (kg)</span><span class="mono" id="kPM">0</span></div>
+  <div class="line"><span>Quantidade Total (kg)</span><span class="mono" id="kQKg">0</span></div>
+</div>
+<div class="block metric-block real">
+  <div class="metric-block-title">Pesos Reais</div>
+  <div class="line"><span>Peso Real por Unidade (g)</span><span class="mono" id="kPUReal">0</span></div>
+  <div class="line"><span>Peso Real do Milheiro (kg)</span><span class="mono" id="kPMReal">0</span></div>
+  <div class="line"><span>Quantidade Real Total (kg)</span><span class="mono" id="kQKgReal">0</span></div>
+</div>
+<div class="line"><span>Preço por KG (R$)</span><span class="mono" id="kPkg">0</span></div>
+<div class="alert" id="alerta">⚠️ Pedido mínimo: <b><span id="minKgTxt">150</span> kg</b> = <b><span id="minMilhTxt">—</span> milheiros</b>.</div>
+<div class="alert" id="alertaPesoMilheiro">⚠️ Milheiro <b>&lt; 1,5 kg</b>. +<b>R$ 3,00</b> no fator kg.</div>
+</div>
+
+<!-- DIREITA: RESULTADOS -->
+<div class="card">
+<h2>Resultado</h2>
+<div class="price-grid">
+<div class="block">
+<div class="line"><span>Unidade</span><span class="mono" id="un0">R$ 0,00</span></div>
+<div class="line"><span>Milheiro</span><span class="mono" id="mil0">R$ 0,00</span></div>
+<div class="line"><span>Preço</span><span class="mono" id="tot0">R$ 0,00</span></div>
+<div class="line">
+  <span>Fator kg</span>
+  <span class="money-edit mono">
+    <span>R$</span>
+    <input class="fkg-input mono" id="fkg0" inputmode="decimal" placeholder="auto" title="Fator kg automático" type="text" readonly tabindex="-1"/>
+  </span>
+</div>
+</div>
+<div class="block green">
+<div class="line"><span>Unidade +%</span><span class="mono" id="un1">R$ 0,00</span></div>
+<div class="line"><span>Milheiro +%</span><span class="mono" id="mil1">R$ 0,00</span></div>
+<div class="line"><span>Preço Final (com clichê)</span><span class="mono" id="tot1">R$ 0,00</span></div>
+<div class="line"><span>Fator kg final</span><span class="mono" id="fkg1">R$ 0,00</span></div>
+</div>
+</div>
+<div class="alert info" id="alertaPrecoEspecial"></div>
+<div class="alert info" id="alertaFatorManual"></div>
+</div>
+</section>
+
+<section class="card" style="margin:16px 22px 0">
+<h2>Proposta Comercial</h2>
+<div class="toolbar">
+<button class="btn orange" id="btnProposta">Gerar Proposta</button>
+</div>
+</section>
+
+<section class="card" style="margin:16px 22px 0">
+  <h2>Itens do Pedido (multi-tamanhos)</h2>
+  <div class="toolbar" style="margin-bottom:10px">
+    <button class="btn secondary" type="button" id="btnAddItem">Adicionar item</button>
+    <button class="btn orange" type="button" id="btnPropostaFinal">Gerar Proposta Final</button>
+    <button class="btn secondary" type="button" id="btnLimparItens">Limpar itens</button>
+    <button class="btn secondary" type="button" id="btnCancelarEdicao" style="display:none">Cancelar edição</button>
+  </div>
+  <div id="listaItens" class="block" style="padding:12px">
+    <div style="color:rgba(255,255,255,.75);font-size:13px">Nenhum item adicionado ainda.</div>
+  </div>
+  <div class="line" style="margin-top:10px">
+    <span>Total geral (itens)</span>
+    <span class="mono" id="totalGeralItens">R$ 0,00</span>
+  </div>
+</section>
+
+<footer style="margin:24px 22px 12px">© Plastcustom Soluções em Plásticos — Todos os direitos reservados</footer>
+<div class="toast" id="toast">✅ Proposta copiada!</div>
+
+<!-- Modal de Proposta -->
+<div aria-labelledby="mTitle" aria-modal="true" class="modal" id="modal" role="dialog">
+<div class="modal-card">
+<div class="modal-head">
+<h3 id="mTitle">Proposta Comercial</h3>
+<div class="toolbar">
+<button class="btn orange" id="btnCopy">Copiar</button>
+<button class="btn secondary" id="btnClose">Fechar</button>
+</div>
+</div>
+<div class="proposal mono" id="preview"></div>
+</div>
+</div>
+
+<div class="top"><button onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Voltar ao topo">▲</button></div>
+
+<script>
+// ============================================================
+// TABELAS DE PREÇOS — Plastcustom
+// Copie/ajuste os valores abaixo conforme sua tabela de preços
+// ============================================================
+window.TABELAS_FATORES_PEDIDO = window.TABELAS_FATORES_PEDIDO || {
+  // ============================================================
+  // TABELA DE FATORES — C/N — Atualizada em 23/06/2026
+  // Faixas: v1 = 150-200kg | v2 = 210-400kg | v3 = 410kg ou +
+  // Acréscimos aplicados na lógica de calc():
+  //   130-150kg: +R$2,50 no fator kg
+  //   100-130kg: +R$3,50 no fator kg
+  //   Milheiro < 1,5kg: +R$3,50 no fator kg
+  // ============================================================
+  TABELA: [
+    // --- VIRGEM AD ---
+    { m:'Virgem AD', i:'IMPRESSÃO FRENTE',         c:'até 2 cores',  v1:36.66, v2:36.01, v3:34.71 },
+    { m:'Virgem AD', i:'IMPRESSÃO FRENTE',         c:'3 ou + cores', v1:37.83, v2:37.31, v3:36.01 },
+    { m:'Virgem AD', i:'IMPRESSÃO FRENTE / VERSO', c:'até 2 cores',  v1:39.13, v2:38.48, v3:37.31 },
+    { m:'Virgem AD', i:'IMPRESSÃO FRENTE / VERSO', c:'3 ou + cores', v1:40.95, v2:40.30, v3:39.78 },
+
+    // --- VIRGEM BD ---
+    { m:'Virgem BD', i:'IMPRESSÃO FRENTE',         c:'até 2 cores',  v1:39.78, v2:39.13, v3:37.96 },
+    { m:'Virgem BD', i:'IMPRESSÃO FRENTE',         c:'3 ou + cores', v1:40.95, v2:40.43, v3:39.13 },
+    { m:'Virgem BD', i:'IMPRESSÃO FRENTE / VERSO', c:'até 2 cores',  v1:42.25, v2:41.60, v3:40.43 },
+    { m:'Virgem BD', i:'IMPRESSÃO FRENTE / VERSO', c:'3 ou + cores', v1:44.07, v2:43.55, v3:42.90 },
+
+    // --- RECICLADO BRANCO / TRANSPARENTE / CORES DEFINIDAS ---
+    { m:'Reciclado Cor', i:'IMPRESSÃO FRENTE',         c:'até 2 cores',  v1:33.15, v2:32.50, v3:31.20 },
+    { m:'Reciclado Cor', i:'IMPRESSÃO FRENTE',         c:'3 ou + cores', v1:34.58, v2:33.80, v3:32.50 },
+    { m:'Reciclado Cor', i:'IMPRESSÃO FRENTE / VERSO', c:'até 2 cores',  v1:35.23, v2:34.58, v3:33.15 },
+    { m:'Reciclado Cor', i:'IMPRESSÃO FRENTE / VERSO', c:'3 ou + cores', v1:37.18, v2:36.53, v3:35.88 },
+
+    // --- RECICLADO SEM COR E TONALIDADE DEFINIDA (somente faixa 150-200kg) ---
+    { m:'Reciclado Sem Cor', i:'IMPRESSÃO FRENTE',         c:'até 2 cores',  v1:26.13, v2:26.13, v3:26.13 },
+    { m:'Reciclado Sem Cor', i:'IMPRESSÃO FRENTE',         c:'3 ou + cores', v1:27.43, v2:27.43, v3:27.43 },
+    { m:'Reciclado Sem Cor', i:'IMPRESSÃO FRENTE / VERSO', c:'até 2 cores',  v1:28.08, v2:28.08, v3:28.08 },
+    { m:'Reciclado Sem Cor', i:'IMPRESSÃO FRENTE / VERSO', c:'3 ou + cores', v1:30.03, v2:30.03, v3:30.03 },
+  ],
+  MAP_PRECO: {
+    'Polietileno (PEAD)':        'Virgem AD',
+    'Polietileno (PEBD)':        'Virgem BD',
+    'Polietileno Biodegradável': 'Virgem AD',
+    'Polietileno':               'Virgem AD',
+    'Reciclado Cor':             'Reciclado Cor',
+    'Reciclado Sem Cor':         'Reciclado Sem Cor',
+    'Polipropileno (PP)':        'Polipropileno (PP)',
+  },
+  PRECOS_PP: {
+    // PP — valores não constam na tabela; manter como placeholder editável
+    com_nf: [
+      { ate:200,   frente2:30.00, frente3:31.50, verso2:32.00, verso3:33.50 },
+      { ate:400,   frente2:29.50, frente3:31.00, verso2:31.50, verso3:33.00 },
+      { ate:99999, frente2:28.50, frente3:30.00, verso2:30.50, verso3:32.00 },
+    ],
+    sem_nf: [
+      { ate:200,   frente2:27.30, frente3:28.70, verso2:29.12, verso3:30.49 },
+      { ate:400,   frente2:26.85, frente3:28.21, verso2:28.67, verso3:30.03 },
+      { ate:99999, frente2:25.94, frente3:27.30, verso2:27.76, verso3:29.12 },
+    ]
+  },
+  TABELA_ESPECIAL_MILHEIRO: []
+};
+</script>
+
+<script>
+const $=s=>document.querySelector(s);
+const $$=s=>Array.from(document.querySelectorAll(s));
+const br2=n=>(isNaN(n)?0:n).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const br0=n=>(isNaN(n)?0:n).toLocaleString('pt-BR');
+
+function getSufixoIpiProposta(tipoNota){
+  const nota = tipoNota || (typeof getTipoNotaPavao === 'function' ? getTipoNotaPavao() : 'com_nf');
+  return nota === 'sem_nf' ? ' + IPI' : '';
+}
+function getMaterialPropostaCurto(material){
+  const m = String(material || '');
+  if(/pead/i.test(m)) return 'PEAD';
+  if(/pebd/i.test(m)) return 'PEBD';
+  if(/polipropileno|pp/i.test(m)) return 'PP';
+  if(/polietileno/i.test(m)) return 'PE';
+  return m || '-';
+}
+function fmtDimensaoProdutoProposta(largura, altura, ehBobina){
+  return ehBobina ? `${fmtMedidaCm(largura)}cm` : `${fmtMedidaCm(largura)}×${fmtMedidaCm(altura)}cm`;
+}
+function fmtDimensaoClicheProposta(txt){
+  const partes = String(txt || '').match(/[\d.,]+/g);
+  if(partes && partes.length >= 2) return `${partes[0]}×${partes[1]}cm`;
+  return String(txt || '-').replace(/\s*cm\s*x\s*/i,'×').replace(/\s*x\s*/i,'×').replace(/cm\s*$/i,'').replace(/$/, 'cm');
+}
+function linhaPontilhadaProposta(esq, dir, largura = 43){
+  const e = String(esq || '');
+  const d = String(dir || '');
+  const pontos = '.'.repeat(Math.max(3, largura - e.length - d.length - 2));
+  return `${e} ${pontos} ${d}`;
+}
+function montarPropostaEscritaItem({ produto, materialExibe, largura, altura, esp, cor, coresN, lado,
+  milheiro, unitario, totalProduto, valorCliche, totalFinal,
+  dimensoesClicheTxt, coresCliche, minUn, milheiros, ehBobina, qtdM, tipoNota }){
+  const qtdUn = Math.round((+milheiros || 0) * 1000);
+  const temImpressao = (+coresN || 0) > 0;
+  const total = +totalFinal || 0;
+  const linhas = [
+    'PROPOSTA – PLASTCUSTOM',
+    `${getNomeProdutoProposta({produto, largura, altura, esp, coresN})} | ${getMaterialPropostaCurto(materialExibe)} | ${fmtDimensaoProdutoProposta(largura, altura, ehBobina)} | ${String(esp).replace('.', ',')}mm | ${getCorProdutoProposta(produto, cor)}`,
+    temImpressao ? `Impressão: ${coresN} ${coresN === 1 ? 'cor' : 'cores'}, ${lado}` : 'Impressão: sem impressão',
+    `R$ ${br2(milheiro)} o milheiro`,
+    ehBobina ? `Pedido mínimo: ${br2(qtdM)} m` : `Pedido mínimo: ${br0(minUn)} un`,
+    ehBobina
+      ? linhaPontilhadaProposta(`${br2(qtdM)} m × R$ ${br2(unitario)}/m`, brMoney(totalProduto))
+      : linhaPontilhadaProposta(`${br0(qtdUn)} un × R$ ${br2(unitario)}/un`, brMoney(totalProduto))
+  ];
+  if(temImpressao && (+valorCliche || 0) > 0){
+    linhas.push(linhaPontilhadaProposta(
+      `Clichê (${fmtDimensaoClicheProposta(dimensoesClicheTxt)}, ${coresCliche} ${coresCliche === 1 ? 'cor' : 'cores'})`,
+      brMoney(valorCliche)
+    ));
+  }
+  linhas.push('─────────────────────────────────────────');
+  linhas.push(linhaPontilhadaProposta('TOTAL', `${brMoney(total)}${getSufixoIpiProposta(tipoNota)}`));
+  return linhas;
+}
+function montarPropostaEscritaPedidoItem(it, idx){
+  const totalItem = +it.totalItem || 0;
+  const valorCliche = +it.valorCliche || 0;
+  const totalProduto = Math.max(0, Math.round((totalItem - valorCliche) * 100) / 100);
+  const itemEhBobina = !!it.ehBobina || isBobinaProduto(it.produto);
+  const qtdM = itemEhBobina ? (isFinite(+it.qtdM) ? (+it.qtdM || 0) : metrosFromMilheiros(it.MILH, 100)) : 0;
+  const qtdUn = Math.round((+it.MILH || 0) * 1000);
+  const coresCliche = (+it.faces || 1) === 2 ? (+it.coresN || 0) * 2 : (+it.coresN || 0);
+  const dimCliche = getDimensoesClicheItemTexto(it);
+  const temImpressao = (+it.coresN || 0) > 0;
+  const quantidadeLinha = itemEhBobina ? `${br2(qtdM)} m` : `${br0(qtdUn)} un`;
+  const linhas = [
+    `ITEM ${idx+1} – ${getNomeProdutoProposta({produto:it.produto, largura:it.L, altura:it.A, esp:it.E, sacoGeloKg:it.sacoGeloKg, coresN:it.coresN})} | ${getMaterialPropostaCurto(it.material)} | ${fmtDimensaoProdutoProposta(it.L, it.A, itemEhBobina)} | ${String(it.E).replace('.', ',')}mm | ${getCorProdutoProposta(it.produto, it.cor)}`,
+    temImpressao ? `Impressão: ${it.coresN} ${it.coresN === 1 ? 'cor' : 'cores'}, ${it.lado}` : 'Impressão: sem impressão',
+    `R$ ${br2(+it.mil || 0)} o milheiro`,
+    `Quantidade: ${quantidadeLinha}`,
+    itemEhBobina
+      ? linhaPontilhadaProposta(`${br2(qtdM)} m × R$ ${br2(+it.un || 0)}/m`, brMoney(totalProduto), 47)
+      : linhaPontilhadaProposta(`${br0(qtdUn)} un × R$ ${br2(+it.un || 0)}/un`, brMoney(totalProduto), 47)
+  ];
+  if(temImpressao && valorCliche > 0){
+    linhas.push(linhaPontilhadaProposta(
+      `Clichê (${fmtDimensaoClicheProposta(dimCliche)}, ${coresCliche} ${coresCliche === 1 ? 'cor' : 'cores'})`,
+      brMoney(valorCliche), 47
+    ));
+    linhas.push('                                    ─────────────');
+  }
+  linhas.push(linhaPontilhadaProposta(`Subtotal Item ${idx+1}`, brMoney(totalItem), 47));
+  return linhas.join('\n');
+}
+const URL_TABELA_CILINDROS_PDF = 'tabela-cilindros.pdf';
+
+// === SACO COM ABA ===
+function isSacoComAba(){ return ($('#produto')?.value || '') === 'Saco com Aba'; }
+const TAMANHOS_SACO_GELO = {
+  '2':{ largura:28, altura:40, esp:0.12, clicheL:22, clicheA:25 },
+  '3':{ largura:32, altura:50, esp:0.12, clicheL:25, clicheA:30 },
+  '4':{ largura:32, altura:54, esp:0.16, clicheL:28, clicheA:35 },
+  '5':{ largura:36, altura:54, esp:0.16, clicheL:30, clicheA:35 }
+};
+function isSacoParaGelo(prod){
+  const p = prod || ($('#produto')?.value || '');
+  return p === 'Saco para Gelo';
+}
+function getSacoGeloKgPorMedidas(largura, altura, esp){
+  return Object.entries(TAMANHOS_SACO_GELO).find(([, item]) =>
+    Math.abs((+largura||0) - item.largura) < 0.01 &&
+    Math.abs((+altura||0) - item.altura) < 0.01 &&
+    Math.abs((+esp||0) - item.esp) < 0.0005
+  )?.[0] || '2';
+}
+function getClicheSacoGelo(produto, largura, altura, esp, sacoGeloKg){
+  if(!isSacoParaGelo(produto)) return null;
+  const kg = sacoGeloKg || ($('#sacoGeloKg')?.value || getSacoGeloKgPorMedidas(largura, altura, esp));
+  const tamanho = TAMANHOS_SACO_GELO[kg];
+  return tamanho ? { l:tamanho.clicheL, a:tamanho.clicheA } : null;
+}
+function getNomeProdutoExibicao(produto, coresN){
+  const p = String(produto || '');
+  const semImpressao = (+coresN || 0) <= 0;
+  if(semImpressao){
+    if(p === 'Saco Impresso') return 'Saco';
+    if(p === 'Saco Impresso Solda Fundo') return 'Saco Solda Fundo';
+  }
+  return p;
+}
+function getNomeProdutoProposta({produto, largura, altura, esp, sacoGeloKg, coresN} = {}){
+  const nomeBase = getNomeProdutoExibicao(produto, coresN);
+  if(!isSacoParaGelo(produto)) return nomeBase;
+  const kg = sacoGeloKg || getSacoGeloKgPorMedidas(largura, altura, esp);
+  return `${nomeBase} ${kg} Kg`;
+}
+function getCorProdutoProposta(produto, cor){
+  return cor || (isSacoParaGelo(produto) ? 'Transparente' : '');
+}
+function isBobinaProduto(prod){
+  const p = prod || ($('#produto')?.value || '');
+  return p === 'Bobina Tubular' || p === 'Bobina Folha';
+}
+function metrosFromMilheiros(milheiros, alturaCm){
+  return (+milheiros||0) * 1000 * ((+alturaCm||0) / 100);
+}
+function milheirosFromMetros(metros, alturaCm){
+  const m = +metros || 0;
+  const altura = +alturaCm || 0;
+  if(!(altura > 0)) return 0;
+  return m / ((altura / 100) * 1000);
+}
+function fmtInputNum(v, casas = 4){
+  const n = +v || 0;
+  if(!isFinite(n)) return '0';
+  return String(Math.round(n * (10**casas)) / (10**casas));
+}
+function parseNumFlexible(v){
+  const txt = String(v ?? '').trim();
+  if(!txt) return 0;
+  const clean = txt.replace(/\s/g,'').replace('R$','');
+  const hasComma = clean.includes(','), hasDot = clean.includes('.');
+  let normalized = clean;
+  if(hasComma && hasDot) normalized = clean.replace(/\./g,'').replace(',','.');
+  else if(hasComma) normalized = clean.replace(',','.');
+  return +normalized.replace(/[^\d.-]/g,'') || 0;
+}
+function getAbaCm(){
+  if(!isSacoComAba()) return 0;
+  const sel = $('#abaSel')?.value;
+  if(sel === 'custom') return (+($('#abaCustom')?.value) || 0);
+  return (+sel || 0);
+}
+function syncAbaUI(){
+  const abaWrap = $('#abaWrap'), abaCustom = $('#abaCustom'), fitaWrap = $('#fitaWrap');
+  if(abaWrap) abaWrap.style.display = isSacoComAba() ? 'flex' : 'none';
+  if(fitaWrap) fitaWrap.style.display = isSacoComAba() ? 'flex' : 'none';
+  const sel = $('#abaSel')?.value;
+  if(abaCustom) abaCustom.style.display = (isSacoComAba() && sel === 'custom') ? 'block' : 'none';
+}
+function aplicarTamanhoSacoGelo({ doCalc = false } = {}){
+  if(!isSacoParaGelo()) return false;
+  const tamanho = TAMANHOS_SACO_GELO[$('#sacoGeloKg')?.value || '2'] || TAMANHOS_SACO_GELO['2'];
+  const set = (sel, val) => { const el = $(sel); if(el && String(el.value) !== String(val)) el.value = String(val); };
+  set('#largura', tamanho.largura);
+  set('#altura', tamanho.altura);
+  set('#esp', fmtInputNum(tamanho.esp, 3));
+  set('#materialExibe', 'Polietileno (PEBD)');
+  set('#corProduto', 'Transparente');
+  set('#imp', 'IMPRESSÃO FRENTE');
+  const coresAreas = $('#coresAreas');
+  if(coresAreas) coresAreas.dataset.resetClicheSacoGelo = '1';
+  if(doCalc && typeof calc === 'function') calc();
+  return true;
+}
+function syncSacoGeloUI({ doCalc = false, aplicarPadrao = true } = {}){
+  const wrap = $('#sacoGeloWrap');
+  if(wrap) wrap.style.display = isSacoParaGelo() ? 'flex' : 'none';
+  if(isSacoParaGelo() && aplicarPadrao) aplicarTamanhoSacoGelo({ doCalc });
+}
+function syncBobinaUI(){
+  const ehBobina = isBobinaProduto();
+  const alturaWrap = $('#alturaWrap'), milheirosWrap = $('#milheirosWrap'), metrosWrap = $('#metrosWrap');
+  const alturaEl = $('#altura'), milheirosEl = $('#milheiros'), metrosEl = $('#metros');
+  if(alturaWrap) alturaWrap.style.display = ehBobina ? 'none' : '';
+  if(milheirosWrap) milheirosWrap.style.display = ehBobina ? 'none' : '';
+  if(metrosWrap) metrosWrap.style.display = ehBobina ? '' : 'none';
+  if(!ehBobina){
+    if(alturaEl?.dataset.prevNonBobina) alturaEl.value = alturaEl.dataset.prevNonBobina;
+    if(milheirosEl?.dataset.prevNonBobina) milheirosEl.value = milheirosEl.dataset.prevNonBobina;
+    return;
+  }
+  if(alturaEl) alturaEl.dataset.prevNonBobina = alturaEl.value || '40';
+  if(milheirosEl) milheirosEl.dataset.prevNonBobina = milheirosEl.value || '30';
+  if(alturaEl) alturaEl.value = '100';
+  if(metrosEl && milheirosEl){
+    const metrosAtual = +metrosEl.value || 0;
+    if(metrosAtual <= 0){
+      const alturaBase = +alturaEl?.value || 100;
+      metrosEl.value = fmtInputNum(metrosFromMilheiros(+milheirosEl.value || 0, alturaBase), 2);
+    }
+    milheirosEl.value = fmtInputNum(milheirosFromMetros(+metrosEl.value || 0, +alturaEl?.value || 100), 6);
+  }
+}
+function getFitaTipo(){
+  if(!isSacoComAba()) return 'nenhuma';
+  return ($('#fitaSel')?.value || 'nenhuma');
+}
+function getFitaRate(){
+  const t = getFitaTipo();
+  if(t === 'auto') return 1.5;
+  if(t === 'inviolavel') return 2.50;
+  return 0;
+}
+function getFitaLabel(){
+  const t = getFitaTipo();
+  if(t === 'auto') return 'Fita auto colante';
+  if(t === 'inviolavel') return 'Fita inviolável';
+  return 'Sem';
+}
+const DENSIDADE_MATERIAL_REAL = 0.92;
+const DESCONTOS_ALCA_SACOLA_CAMISETA = [
+  { largura:30, altura:40, percentual:0.14 },{ largura:30, altura:42, percentual:0.14 },
+  { largura:30, altura:46, percentual:0.14 },{ largura:35, altura:40, percentual:0.12 },
+  { largura:35, altura:46, percentual:0.12 },{ largura:38, altura:50, percentual:0.10 },
+  { largura:40, altura:50, percentual:0.10 },{ largura:45, altura:50, percentual:0.10 },
+  { largura:45, altura:60, percentual:0.10 },{ largura:50, altura:60, percentual:0.10 },
+  { largura:60, altura:80, percentual:0.10 },{ largura:70, altura:80, percentual:0.10 },
+  { largura:80, altura:90, percentual:0.08 },{ largura:80, altura:100, percentual:0.08 }
+];
+function medidasIguaisPesoReal(a, b){ return Math.abs((+a||0)-(+b||0)) <= 0.01; }
+function percentualAlcaSacolaCamiseta(produto, largura, altura){
+  const produtoNorm = String(produto||'').trim().toUpperCase();
+  if(produtoNorm !== 'SACOLA CAMISETA' && produtoNorm !== 'SACOLA ALCA CAMISETA') return 0;
+  const regra = DESCONTOS_ALCA_SACOLA_CAMISETA.find(item =>
+    medidasIguaisPesoReal(largura, item.largura) && medidasIguaisPesoReal(altura, item.altura));
+  return regra ? regra.percentual : 0;
+}
+function calcularPesoRealProduto({ produto, largura, altura, pesoUnidadeG, milheiros }){
+  const pesoBaseUnidadeG = +pesoUnidadeG || 0;
+  const milh = +milheiros || 0;
+  const descontoAlca = percentualAlcaSacolaCamiseta(produto, largura, altura);
+  const pesoUnidadeRealG = pesoBaseUnidadeG * DENSIDADE_MATERIAL_REAL * (1 - descontoAlca);
+  const pesoMilheiroRealKg = pesoUnidadeRealG;
+  const pesoTotalRealKg = pesoMilheiroRealKg * milh;
+  return { descontoAlca, pesoUnidadeRealG, pesoMilheiroRealKg, pesoTotalRealKg };
+}
+
+// === TABELAS DE PREÇOS ===
+const TABELAS_FATORES = window.TABELAS_FATORES_PEDIDO || {};
+const TABELA = TABELAS_FATORES.TABELA || [];
+const MAP_PRECO = TABELAS_FATORES.MAP_PRECO || {};
+const PRECOS_PP = TABELAS_FATORES.PRECOS_PP || { com_nf:[], sem_nf:[] };
+
+// === TABELA DE CILINDROS ===
+const TABELA_CILINDRO_IMPRESSORA = [
+  { impressora:1, cilindro:28, cores:3 },{ impressora:1, cilindro:29, cores:4 },
+  { impressora:1, cilindro:30, cores:4 },{ impressora:1, cilindro:32, cores:3 },
+  { impressora:1, cilindro:34, cores:4 },{ impressora:1, cilindro:36, cores:4 },
+  { impressora:1, cilindro:38, cores:4 },{ impressora:1, cilindro:40, cores:4 },
+  { impressora:1, cilindro:42, cores:3 },{ impressora:1, cilindro:46, cores:2 },
+  { impressora:1, cilindro:50, cores:4 },{ impressora:1, cilindro:52, cores:4 },
+  { impressora:1, cilindro:58, cores:4 },{ impressora:1, cilindro:60, cores:4 },
+  { impressora:1, cilindro:68, cores:4 },{ impressora:1, cilindro:70, cores:4 },
+  { impressora:1, cilindro:72, cores:2 },{ impressora:1, cilindro:100, cores:2 },
+  { impressora:2, cilindro:28, cores:3 },{ impressora:2, cilindro:29, cores:4 },
+  { impressora:2, cilindro:30, cores:4 },{ impressora:2, cilindro:32, cores:3 },
+  { impressora:2, cilindro:34, cores:4 },{ impressora:2, cilindro:36, cores:4 },
+  { impressora:2, cilindro:38, cores:4 },{ impressora:2, cilindro:40, cores:4 },
+  { impressora:2, cilindro:42, cores:3 },{ impressora:2, cilindro:46, cores:2 },
+  { impressora:2, cilindro:50, cores:4 },{ impressora:2, cilindro:52, cores:4 },
+  { impressora:2, cilindro:58, cores:4 },{ impressora:2, cilindro:60, cores:4 },
+  { impressora:2, cilindro:68, cores:4 },{ impressora:2, cilindro:70, cores:4 },
+  { impressora:2, cilindro:72, cores:2 },{ impressora:2, cilindro:100, cores:2 },
+  { impressora:3, cilindro:30, cores:6 },{ impressora:3, cilindro:35, cores:6 },
+  { impressora:3, cilindro:42, cores:6 },{ impressora:3, cilindro:50, cores:6 },
+  { impressora:3, cilindro:55, cores:4 },{ impressora:3, cilindro:60, cores:6 },
+  { impressora:3, cilindro:70, cores:6 },{ impressora:3, cilindro:80, cores:5 },
+  { impressora:3, cilindro:90, cores:2 },{ impressora:3, cilindro:100, cores:4 }
+];
+const CILINDROS_DISPONIVEIS = Array.from(new Set(TABELA_CILINDRO_IMPRESSORA.map(x => +x.cilindro||0))).filter(v=>v>0).sort((a,b)=>a-b);
+
+function fmtCil(v){
+  const n = +v||0;
+  if(!isFinite(n)) return '0';
+  if(Math.abs(n - Math.round(n)) < 1e-9) return String(Math.round(n));
+  return String(Math.round(n*100)/100).replace('.',',');
+}
+function produtoComRegraCilindro(produto){
+  return produto==='Sacola Vazada'||produto==='Sacola Camiseta'||produto==='Saco Impresso'||produto==='Saco para Gelo'||produto==='Saco com Aba'||produto==='Saco Impresso Solda Fundo';
+}
+function medidaBaseCilindro(produto, largura, altura){
+  if(produto==='Sacola Vazada'||produto==='Saco Impresso'||produto==='Saco para Gelo'||produto==='Saco com Aba') return +largura||0;
+  if(produto==='Sacola Camiseta'||produto==='Saco Impresso Solda Fundo') return +altura||0;
+  return 0;
+}
+function getMaxRepeticoesCilindro(produto){
+  if(produto==='Sacola Camiseta') return 1;
+  if(produto==='Sacola Vazada') return 3;
+  if(produto==='Saco Impresso'||produto==='Saco para Gelo'||produto==='Saco Impresso Solda Fundo'||produto==='Saco com Aba') return 4;
+  return 3;
+}
+function cilindroMaisProximo(alvo){
+  if(!CILINDROS_DISPONIVEIS.length) return 0;
+  const base = +alvo||0;
+  let melhor = CILINDROS_DISPONIVEIS[0];
+  for(const cil of CILINDROS_DISPONIVEIS){
+    const d1 = Math.abs(cil-base), d2 = Math.abs(melhor-base);
+    if(d1 < d2 || (d1===d2 && cil<melhor)) melhor = cil;
+  }
+  return melhor;
+}
+function cilindroMaisProximoCompativelCores(alvo, coresSelecionadas){
+  const coresSel = +coresSelecionadas||0;
+  if(!(coresSel>0)) return cilindroMaisProximo(alvo);
+  const candidatos = Array.from(new Set(TABELA_CILINDRO_IMPRESSORA.filter(x=>(+x.cores||0)>=coresSel).map(x=>+x.cilindro||0))).filter(v=>v>0).sort((a,b)=>a-b);
+  if(!candidatos.length) return 0;
+  const base = +alvo||0;
+  let melhor = candidatos[0];
+  for(const cil of candidatos){
+    const d1=Math.abs(cil-base), d2=Math.abs(melhor-base);
+    if(d1<d2||(d1===d2&&cil<melhor)) melhor=cil;
+  }
+  return melhor;
+}
+function produtoAceitaCilindro50ParaMedida48(produto, medida){
+  const m = +medida||0;
+  return (produto==='Sacola Camiseta'||produto==='Saco Impresso Solda Fundo') && Math.abs(m-48)<1e-9;
+}
+function disponibilidadeCilindro(medidaBase, coresSelecionadas, maxRepeticoes=3, produto=''){
+  const coresSel = +coresSelecionadas||0;
+  const produtoAtual = String(produto||'');
+  const out = [];
+  for(let rep=1; rep<=maxRepeticoes; rep++){
+    const alvo = medidaBase * rep;
+    let itens = TABELA_CILINDRO_IMPRESSORA.filter(x=>Math.abs((+x.cilindro||0)-alvo)<1e-9);
+    if(!itens.length && produtoAceitaCilindro50ParaMedida48(produtoAtual, alvo)){
+      itens = TABELA_CILINDRO_IMPRESSORA.filter(x=>Math.abs((+x.cilindro||0)-50)<1e-9);
+    }
+    if(itens.length){
+      const maxCores = Math.max(...itens.map(x=>+x.cores||0));
+      out.push({ rep, alvo, cilindroReal: produtoAceitaCilindro50ParaMedida48(produtoAtual, alvo)?50:alvo, disponivel:true, maxCores, okCores: coresSel===0||coresSel<=maxCores });
+    } else {
+      out.push({ rep, alvo, disponivel:false, maisProximo: cilindroMaisProximo(alvo) });
+    }
+  }
+  return out;
+}
+function getDimensoesClicheTexto(totalCores){
+  const n = +totalCores||0;
+  if(!(n>0)) return '0cm x 0cm';
+  const clicheSacoGelo = getClicheSacoGelo($('#produto')?.value||'',$('#largura')?.value,$('#altura')?.value,$('#esp')?.value,$('#sacoGeloKg')?.value);
+  const dims = [];
+  const totalCards = (typeof getTotalCardsCliche==='function') ? getTotalCardsCliche() : n;
+  for(let i=1; i<=totalCards; i++){
+    const l = +(document.querySelector('#corL_'+i)?.value||0);
+    const a = +(document.querySelector('#corA_'+i)?.value||0);
+    if(l>0&&a>0) dims.push({ l, a, area:l*a });
+  }
+  if(!dims.length && clicheSacoGelo) return `${fmtCil(clicheSacoGelo.l)}cm x ${fmtCil(clicheSacoGelo.a)}cm`;
+  if(!dims.length) return '0cm x 0cm';
+  const maior = dims.reduce((acc,cur)=>cur.area>acc.area?cur:acc, dims[0]);
+  return `${fmtCil(maior.l)}cm x ${fmtCil(maior.a)}cm`;
+}
+function getDimensoesClicheItemTexto(it){
+  if(it?.dimensoesClicheTxt) return it.dimensoesClicheTxt;
+  const clicheSacoGelo = getClicheSacoGelo(it?.produto, it?.L, it?.A, it?.E, it?.sacoGeloKg);
+  if(clicheSacoGelo) return `${fmtCil(clicheSacoGelo.l)}cm x ${fmtCil(clicheSacoGelo.a)}cm`;
+  const alturaCliche = +(it?.Acalc||it?.A||0);
+  return `${fmtMedidaCm(it?.L||0)}cm x ${fmtMedidaCm(alturaCliche)}cm`;
+}
+function getRotuloMedidaBaseCilindro(produto){
+  if(produto==='Sacola Vazada'||produto==='Saco Impresso'||produto==='Saco para Gelo'||produto==='Saco com Aba') return 'Largura base';
+  if(produto==='Sacola Camiseta'||produto==='Saco Impresso Solda Fundo') return 'Altura base';
+  return 'Medida base';
+}
+function getInfoCilindro(produto, largura, altura, coresSelecionadas){
+  if(!produtoComRegraCilindro(produto)) return { ativo:false, tipo:'info', mensagem:'', linhas:[] };
+  const medida = medidaBaseCilindro(produto, largura, altura);
+  if(!(medida>0)) return { ativo:false, tipo:'info', mensagem:'', linhas:[] };
+  const maxRepeticoes = getMaxRepeticoesCilindro(produto);
+  const reps = disponibilidadeCilindro(medida, coresSelecionadas, maxRepeticoes, produto);
+  const coresSel = +coresSelecionadas||0;
+  const opcoesValidas = reps.filter(r=>r.disponivel&&r.okCores);
+  const opcoesComCilindro = reps.filter(r=>r.disponivel);
+  const escolherMenorRep = lista => lista.length ? lista.reduce((melhor,atual)=>atual.rep<melhor.rep?atual:melhor, lista[0]) : null;
+  const melhorOpcao = opcoesValidas.length ? escolherMenorRep(opcoesValidas) : null;
+  const melhorComLimite = escolherMenorRep(opcoesComCilindro);
+  const melhorSemOpcao = escolherMenorRep(reps);
+  const recomendacaoLimite = melhorComLimite ? cilindroMaisProximoCompativelCores(melhorComLimite.alvo, coresSel) : 0;
+  const recomendacaoLimiteFmt = recomendacaoLimite>0 ? fmtCil(recomendacaoLimite) : '';
+  const mapLinha = r => {
+    if(r.disponivel&&r.okCores) return { rep:r.rep, alvo:fmtCil(r.cilindroReal||r.alvo), status:'ok', statusLabel:'OK', detalhe:`até ${r.maxCores} ${r.maxCores===1?'cor':'cores'}`, melhor:!!melhorOpcao&&r.rep===melhorOpcao.rep };
+    if(r.disponivel) return { rep:r.rep, alvo:fmtCil(r.cilindroReal||r.alvo), status:'limit', statusLabel:'Limite', detalhe:`máx. ${r.maxCores} ${r.maxCores===1?'cor':'cores'}`, melhor:false };
+    return { rep:r.rep, alvo:fmtCil(r.alvo), status:'off', statusLabel:'Sem', detalhe:r.maisProximo?`prox. ${fmtCil(r.maisProximo)}`:'-', melhor:false };
+  };
+  const medidaLabel = getRotuloMedidaBaseCilindro(produto);
+  const coresLabel = coresSel>0 ? `${coresSel} ${coresSel===1?'cor':'cores'}` : 'Sem imp.';
+  if(opcoesValidas.length) return { ativo:true, tipo:'info', mensagem:'Medida e cores compatíveis.', badge:'OK', medidaLabel, medida:fmtCil(medida), coresLabel, melhorRep:melhorOpcao?.rep||0, melhorCilindro:melhorOpcao?fmtCil(melhorOpcao.cilindroReal||melhorOpcao.alvo):'', linhas:melhorOpcao?[mapLinha(melhorOpcao)]:[] };
+  if(opcoesComCilindro.length) return { ativo:true, tipo:'warn', mensagem:'Há cilindro, mas falta capacidade de cores.', badge:'Limite', medidaLabel, medida:fmtCil(medida), coresLabel, melhorRep:0, melhorCilindro:'', recomendacaoCilindro:recomendacaoLimiteFmt, linhas:melhorComLimite?[mapLinha(melhorComLimite)]:[] };
+  return { ativo:true, tipo:'warn', mensagem:`Sem cilindro exato em até ${maxRepeticoes} ${maxRepeticoes===1?'repetição':'repetições'}.`, badge:'Sem opção', medidaLabel, medida:fmtCil(medida), coresLabel, melhorRep:0, melhorCilindro:'', recomendacaoCilindro:'', linhas:melhorSemOpcao?[mapLinha(melhorSemOpcao)]:[] };
+}
+function escapeHtml(str){
+  return String(str??'').replace(/[&<>"']/g, s=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+}
+function atualizarAlertaCilindro(produto, largura, altura, coresSelecionadas){
+  const el = document.querySelector('#alertaCilindro');
+  if(!el) return;
+  const info = getInfoCilindro(produto, largura, altura, coresSelecionadas);
+  if(!info.ativo){ el.style.display='none'; el.classList.remove('info'); el.innerHTML=''; return; }
+  const linhasHtml = (info.linhas||[]).map(linha=>`
+    <tr class="${linha.melhor?'cilindro-row-best':''}">
+      <td><strong>${escapeHtml(String(linha.rep))}x</strong></td>
+      <td>${escapeHtml(String(linha.alvo))}</td>
+      <td><span class="cilindro-status ${escapeHtml(linha.status)}">${escapeHtml(linha.statusLabel)}</span></td>
+      <td class="muted">
+        <div class="cilindro-obs-cell">
+          <span class="cilindro-obs-text">${escapeHtml(linha.detalhe||'-')}</span>
+          ${linha.melhor?'<span class="cilindro-best-tag">Melhor</span>':''}
+        </div>
+      </td>
+    </tr>`).join('');
+  const melhorHtml = info.melhorRep ? `<span class="cilindro-best-chip"><b>Melhor:</b> ${escapeHtml(String(info.melhorRep))}x (${escapeHtml(String(info.melhorCilindro||'-'))} cm)</span>` : '';
+  const recomendacaoHtml = info.recomendacaoCilindro ? `<span class="cilindro-reco-chip"><b>Recomendado:</b> ${escapeHtml(String(info.recomendacaoCilindro))} cm</span>` : '';
+  el.innerHTML = `<div class="cilindro-alert">
+    <div class="cilindro-alert-head">
+      <div><div class="cilindro-alert-title">Cilindros</div><div class="cilindro-alert-sub">${escapeHtml(info.mensagem||'')}</div></div>
+      <span class="cilindro-alert-badge">${escapeHtml(info.badge||'Cilindro')}</span>
+    </div>
+    <div class="cilindro-alert-meta">
+      <span><b>Base:</b> ${escapeHtml(String(info.medida||'-'))} cm</span>
+      <span><b>Cores:</b> ${escapeHtml(info.coresLabel||'-')}</span>
+      ${melhorHtml}${recomendacaoHtml}
+    </div>
+    <div class="cilindro-alert-table-wrap">
+      <table class="cilindro-alert-table">
+        <thead><tr><th>Rep.</th><th>Cilindro</th><th>Status</th><th>Obs.</th></tr></thead>
+        <tbody>${linhasHtml}</tbody>
+      </table>
+    </div>
+  </div>`;
+  el.classList.toggle('info', info.tipo==='info');
+  el.style.display='block';
+}
+
+// === PREÇOS ===
+function faixaCores(n){ return n<=2?'até 2 cores':'3 ou + cores'; }
+function getTipoNotaPavao(){ return $('#tipoNotaPavao')?.value||'com_nf'; }
+function lookupPpTabela(imp, cores, kg){
+  const tabela = PRECOS_PP[getTipoNotaPavao()]||PRECOS_PP.com_nf;
+  const faixa = tabela.find(x=>(+kg||0)<=x.ate)||tabela[tabela.length-1];
+  if(!faixa) return 0;
+  const frenteVerso = /VERSO/.test(imp||'');
+  const ate2 = cores!=='3 ou + cores';
+  if(frenteVerso) return ate2?faixa.verso2:faixa.verso3;
+  return ate2?faixa.frente2:faixa.frente3;
+}
+function lookup(material, imp, cores, kg){
+  if(material==='Polipropileno (PP)') return lookupPpTabela(imp, cores, kg);
+  const r = TABELA.find(x=>x.m===material&&x.i===imp&&x.c===cores);
+  if(!r) return 0;
+  const fatorBase = kg<=200?r.v1:kg<=400?r.v2:r.v3;
+  return getTipoNotaPavao()==='sem_nf'?fatorBase*0.91:fatorBase;
+}
+const TABELA_ESPECIAL_MILHEIRO = TABELAS_FATORES.TABELA_ESPECIAL_MILHEIRO || [];
+function quaseIgual(a,b,tol=0.0001){ return Math.abs((+a||0)-(+b||0))<=tol; }
+function faixaCoresEspecial(coresN, imp){
+  const n = +coresN||0;
+  if(n<=0) return null;
+  if(/VERSO/.test(imp||'')){ if(n===1) return 'ate1'; if(n===2) return 'ate2'; return null; }
+  if(n<=2) return 'ate2'; if(n<=4) return 'ate4'; return null;
+}
+function normalizarAlturaEspecialMilheiro({produto, largura, altura, esp}){
+  if(produto==='Sacola Camiseta'&&quaseIgual(largura,38,0.01)&&quaseIgual(altura,48,0.01)&&quaseIgual(esp,0.028,0.0005)) return 50;
+  return altura;
+}
+function getMinUnEspecial({produto, materialExibe, largura, altura, esp}){
+  const alturaEspecial = normalizarAlturaEspecialMilheiro({produto, largura, altura, esp});
+  const itens = TABELA_ESPECIAL_MILHEIRO.filter(x=>x.produto===produto&&x.materialExibe===materialExibe&&quaseIgual(x.largura,largura,0.01)&&quaseIgual(x.altura,alturaEspecial,0.01)&&quaseIgual(x.esp,esp,0.0005));
+  if(!itens.length) return 0;
+  let minUn = Infinity;
+  for(const item of itens) for(const faixa of (item.faixas||[])){ const n=+faixa.minUn||0; if(n>0&&n<minUn) minUn=n; }
+  return Number.isFinite(minUn)?minUn:0;
+}
+function lookupMilheiroEspecial({produto, materialExibe, imp, coresN, largura, altura, esp, milheiros}){
+  const faixa = faixaCoresEspecial(coresN, imp);
+  if(!faixa) return null;
+  const alturaEspecial = normalizarAlturaEspecialMilheiro({produto, largura, altura, esp});
+  const item = TABELA_ESPECIAL_MILHEIRO.find(x=>x.produto===produto&&x.materialExibe===materialExibe&&x.imp===imp&&quaseIgual(x.largura,largura,0.01)&&quaseIgual(x.altura,alturaEspecial,0.01)&&quaseIgual(x.esp,esp,0.0005));
+  if(!item) return null;
+  const qtdUn = Math.round((+milheiros||0)*1000);
+  const faixas = getTipoNotaPavao()==='sem_nf'&&item.faixasSemNf ? item.faixasSemNf : item.faixas;
+  let faixaEscolhida = null;
+  for(const f of faixas){ if(qtdUn>=f.minUn) faixaEscolhida=f; }
+  if(!faixaEscolhida) return null;
+  const valorMilheiro = +faixaEscolhida[faixa]||0;
+  if(!(valorMilheiro>0)) return null;
+  return { valorMilheiro, minUnFaixa: faixaEscolhida.minUn };
+}
+
+// === VALIDAÇÕES ===
+function syncTipoNotaAlert(){
+  const el = document.querySelector('#tipoNotaPavao');
+  if(!el) return;
+  const ativo = el.value === 'sem_nf';
+  if(ativo){ el.style.background='#1f1a0b'; el.style.borderColor='#eab308'; el.style.color='#fff7c2'; el.style.boxShadow='0 0 0 1px rgba(234,179,8,.18)'; }
+  else { el.style.background=''; el.style.borderColor=''; el.style.color=''; el.style.boxShadow=''; }
+}
+function produtoFrenteVersoPermiteAte6Cores(produto){
+  return produto==='Sacola Vazada'||produto==='Saco Impresso'||produto==='Saco para Gelo'||produto==='Saco com Aba';
+}
+function syncLimiteCoresPorImpressao({ render = false } = {}){
+  const impEl = document.querySelector('#imp'), coresEl = document.querySelector('#coresNum'), produtoEl = document.querySelector('#produto');
+  if(!impEl||!coresEl) return false;
+  const frenteVerso = /VERSO/.test(impEl.value||''), produto = produtoEl?.value||'';
+  const maxCores = frenteVerso&&!produtoFrenteVersoPermiteAte6Cores(produto)?3:6;
+  let mudou = false;
+  Array.from(coresEl.options).forEach(opt=>{ const val=+opt.value||0; const bloquear=val>maxCores; opt.disabled=bloquear; opt.hidden=bloquear; });
+  if((+coresEl.value||0)>maxCores){ coresEl.value=String(maxCores); mudou=true; }
+  if(render&&typeof renderCoresAreas==='function') renderCoresAreas();
+  return mudou;
+}
+const LARGURAS_SACOLA_CAMISETA_PERMITIDAS = [30,35,38,40,45,50,55,60,65,70,75,80,85,90];
+function larguraPermitidaSacolaCamiseta(largura){ return LARGURAS_SACOLA_CAMISETA_PERMITIDAS.some(v=>Math.abs(v-(+largura||0))<0.001); }
+function larguraCamisetaMaisProxima(largura){ const l=+largura||0; return LARGURAS_SACOLA_CAMISETA_PERMITIDAS.reduce((melhor,atual)=>Math.abs(atual-l)<Math.abs(melhor-l)?atual:melhor, LARGURAS_SACOLA_CAMISETA_PERMITIDAS[0]); }
+function showRegraToast(msg, tempo=1600){
+  const t = document.querySelector('#toast');
+  if(!t) return;
+  const agora = Date.now(), msgNorm = String(msg||'').trim();
+  if(window.__toastRegraLastMsg===msgNorm&&(agora-(window.__toastRegraLastAt||0))<450) return;
+  window.__toastRegraLastMsg=msgNorm; window.__toastRegraLastAt=agora;
+  const ehAlertaAjuste = /^(Altura|Largura) ajustada para\b/.test(msgNorm);
+  if(window.__toastRegraTimer) clearTimeout(window.__toastRegraTimer);
+  t.onclick=null; t.classList.remove('regra-toast-modal'); t.textContent=msg;
+  if(ehAlertaAjuste){ t.classList.add('regra-toast-modal'); t.onclick=()=>{ if(window.__toastRegraTimer) clearTimeout(window.__toastRegraTimer); t.classList.remove('show','regra-toast-modal'); t.onclick=null; }; tempo=Math.max(tempo,3000); }
+  t.classList.add('show');
+  window.__toastRegraTimer=setTimeout(()=>{ t.classList.remove('show','regra-toast-modal'); t.onclick=null; }, tempo);
+}
+function validarLarguraSacolaCamiseta({ notify=true, doCalc=true }={}){
+  const produto=document.querySelector("#produto")?.value||'', elLargura=document.querySelector("#largura");
+  if(produto!=='Sacola Camiseta'||!elLargura) return true;
+  const largura=+elLargura.value||0;
+  if(larguraPermitidaSacolaCamiseta(largura)){ elLargura.dataset.lastValidCamiseta=String(largura); return true; }
+  const larguraAjustada=larguraCamisetaMaisProxima(largura);
+  elLargura.value=String(larguraAjustada); elLargura.dataset.lastValidCamiseta=String(larguraAjustada);
+  if(notify) showRegraToast(`Largura ajustada para ${larguraAjustada} cm.`);
+  if(doCalc&&typeof calc==='function') calc();
+  return false;
+}
+function validarEspessuraMinima({ notify=true, doCalc=true }={}){
+  const elEsp=document.querySelector("#esp"); if(!elEsp) return true;
+  let esp=parseNumFlexible(elEsp.value); let corrigiuZeros=false;
+  while(esp>0&&esp<0.001){ esp*=10; corrigiuZeros=true; }
+  if(esp>=0.001){ elEsp.dataset.lastValidEsp=fmtInputNum(esp,4); elEsp.value=fmtInputNum(esp,4); if(corrigiuZeros&&notify) showRegraToast(`Espessura ajustada para ${fmtInputNum(esp,4).replace('.',',')} mm.`); return true; }
+  elEsp.value=elEsp.dataset.lastValidEsp||'0.028';
+  if(notify) showRegraToast('Espessura mínima: 0,001 mm.');
+  if(doCalc&&typeof calc==='function') calc();
+  return false;
+}
+function alturaCamisetaComCilindro(altura, coresSelecionadas){
+  const a=+altura||0, cores=+coresSelecionadas||0;
+  if(!(a>0)) return false;
+  if(produtoAceitaCilindro50ParaMedida48('Sacola Camiseta',a)) return TABELA_CILINDRO_IMPRESSORA.some(item=>Math.abs((+item.cilindro||0)-50)<0.001&&(cores<=0||(+item.cores||0)>=cores));
+  return TABELA_CILINDRO_IMPRESSORA.some(item=>Math.abs((+item.cilindro||0)-a)<0.001&&(cores<=0||(+item.cores||0)>=cores));
+}
+function alturaCamisetaMaisProximaComCilindro(altura, coresSelecionadas){
+  const alvo=+altura||0, cores=+coresSelecionadas||0;
+  if(produtoAceitaCilindro50ParaMedida48('Sacola Camiseta',alvo)) return 50;
+  const compativel=cilindroMaisProximoCompativelCores(alvo,cores);
+  return compativel||cilindroMaisProximo(alvo);
+}
+function validarAlturaCilindroSacolaCamiseta({ notify=true, doCalc=true }={}){
+  const produto=document.querySelector("#produto")?.value||'', elAltura=document.querySelector("#altura");
+  if(produto!=='Sacola Camiseta'||!elAltura) return true;
+  const altura=+elAltura.value||0, coresN=+document.querySelector("#coresNum")?.value||0;
+  if(alturaCamisetaComCilindro(altura,coresN)){ elAltura.dataset.lastValidCilindro=String(altura); return true; }
+  const alturaAjustada=alturaCamisetaMaisProximaComCilindro(altura,coresN);
+  if(!(alturaAjustada>0)) return true;
+  elAltura.value=fmtInputNum(alturaAjustada,2); elAltura.dataset.lastValidCilindro=String(alturaAjustada);
+  if(notify) showRegraToast(`Altura ajustada para ${fmtCil(alturaAjustada)} cm (cilindro disponível).`,1800);
+  if(typeof aplicarPistasAuto==='function') aplicarPistasAuto({doCalc:false});
+  if(typeof aplicarClicheAuto==='function') aplicarClicheAuto({doCalc:false});
+  if(doCalc&&typeof calc==='function') calc();
+  return false;
+}
+function produtoUsaLarguraComCilindro(produto){ return produto==='Sacola Vazada'||produto==='Saco com Aba'||produto==='Saco Impresso'||produto==='Saco para Gelo'; }
+function getRepeticaoCilindroParaPistas(produto, largura, coresSelecionadas){
+  if(!produtoUsaLarguraComCilindro(produto)) return 0;
+  const l=+largura||0; if(!(l>0)) return 0;
+  const reps=disponibilidadeCilindro(l,coresSelecionadas,getMaxRepeticoesCilindro(produto),produto);
+  const validas=reps.filter(r=>r.disponivel&&r.okCores);
+  if(!validas.length) return 0;
+  return validas.reduce((melhor,atual)=>atual.rep<melhor.rep?atual:melhor, validas[0]).rep;
+}
+function larguraProdutoComCilindroDisponivel(produto, largura, coresSelecionadas){
+  const l=+largura||0; if(!(l>0)) return false;
+  const reps=disponibilidadeCilindro(l,coresSelecionadas,getMaxRepeticoesCilindro(produto),produto);
+  return reps.some(r=>r.disponivel&&r.okCores);
+}
+function larguraTemCilindroNaImpressora3(produto, largura, coresSelecionadas){
+  if(!produtoUsaLarguraComCilindro(produto)) return false;
+  const l=+largura||0, cores=+coresSelecionadas||0; if(!(l>0)) return false;
+  const maxRep=getMaxRepeticoesCilindro(produto);
+  for(let rep=1; rep<=maxRep; rep++){
+    const cilindroAlvo=Math.round(l*rep*100)/100;
+    const temOpcao=TABELA_CILINDRO_IMPRESSORA.some(item=>(+item.impressora||0)===3&&Math.abs((+item.cilindro||0)-cilindroAlvo)<0.001&&(cores<=0||(+item.cores||0)>=cores));
+    if(temOpcao) return true;
+  }
+  return false;
+}
+function getAlturaMaximaFrenteVersoCilindro(produto, largura, coresSelecionadas){ return larguraTemCilindroNaImpressora3(produto,largura,coresSelecionadas)?60:50; }
+function validarAlturaFrenteVersoCilindroProdutos({ notify=true, doCalc=true }={}){
+  const produto=document.querySelector("#produto")?.value||'', elAltura=document.querySelector("#altura"), imp=document.querySelector("#imp")?.value||'';
+  if(!produtoUsaLarguraComCilindro(produto)||!elAltura||!/VERSO/.test(imp)) return true;
+  const altura=+elAltura.value||0; if(!(altura>0)) return true;
+  const largura=+document.querySelector("#largura")?.value||0, coresN=+document.querySelector("#coresNum")?.value||0;
+  const temImpressora3=larguraTemCilindroNaImpressora3(produto,largura,coresN), limite=getAlturaMaximaFrenteVersoCilindro(produto,largura,coresN);
+  if(altura<=limite){ elAltura.dataset.lastValidFrenteVerso=String(altura); return true; }
+  elAltura.value=fmtInputNum(limite,2); elAltura.dataset.lastValidFrenteVerso=String(limite);
+  if(notify){ const motivo=temImpressora3?'com cilindro na impressora 3':'sem cilindro na impressora 3'; showRegraToast(`Altura ajustada para ${limite} cm (${motivo}, frente/verso).`,1900); }
+  if(typeof aplicarClicheAuto==='function') aplicarClicheAuto({doCalc:false});
+  if(doCalc&&typeof calc==='function') calc();
+  return false;
+}
+function larguraProdutoMaisProximaComCilindro(produto, largura, coresSelecionadas){
+  const alvo=+largura||0, cores=+coresSelecionadas||0, maxRep=getMaxRepeticoesCilindro(produto);
+  const candidatos=[];
+  for(const item of TABELA_CILINDRO_IMPRESSORA){
+    const cil=+item.cilindro||0, maxCores=+item.cores||0; if(!(cil>0)) continue;
+    if(cores>0&&maxCores<cores) continue;
+    for(let rep=1; rep<=maxRep; rep++){
+      const larguraCand=Math.round((cil/rep)*100)/100;
+      if(larguraProdutoComCilindroDisponivel(produto,larguraCand,cores)) candidatos.push(larguraCand);
+    }
+  }
+  const unicos=Array.from(new Set(candidatos)).filter(v=>v>0).sort((a,b)=>a-b);
+  if(!unicos.length) return 0;
+  return unicos.reduce((melhor,atual)=>{ const dAtual=Math.abs(atual-alvo), dMelhor=Math.abs(melhor-alvo); return dAtual<dMelhor||(dAtual===dMelhor&&atual<melhor)?atual:melhor; }, unicos[0]);
+}
+function validarLarguraCilindroProdutos({ notify=true, doCalc=true }={}){
+  const produto=document.querySelector("#produto")?.value||'', elLargura=document.querySelector("#largura");
+  if(!produtoUsaLarguraComCilindro(produto)||!elLargura) return true;
+  const largura=+elLargura.value||0, coresN=+document.querySelector("#coresNum")?.value||0;
+  if(larguraProdutoComCilindroDisponivel(produto,largura,coresN)){ elLargura.dataset.lastValidCilindro=String(largura); return true; }
+  const larguraAjustada=larguraProdutoMaisProximaComCilindro(produto,largura,coresN);
+  if(!(larguraAjustada>0)) return true;
+  elLargura.value=fmtInputNum(larguraAjustada,2); elLargura.dataset.lastValidCilindro=String(larguraAjustada);
+  if(notify) showRegraToast(`Largura ajustada para ${fmtCil(larguraAjustada)} cm (cilindro disponível).`,1800);
+  if(typeof aplicarClicheAuto==='function') aplicarClicheAuto({doCalc:false});
+  if(doCalc&&typeof calc==='function') calc();
+  return false;
+}
+function calcularPistasSacolaCamiseta(largura, espessura){
+  const l=+largura||0, esp=+espessura||0;
+  if(!(l>0)) return 0;
+  if((l===50||l===55)&&esp>0.05) return 1;
+  const regras=[{ bases:[30], pistas:3 },{ bases:[35,38,40,45,50,55], pistas:2 },{ bases:[60,65,70,75,80,85,90], pistas:1 }];
+  for(const regra of regras) for(const base of regra.bases) if(l===base) return regra.pistas;
+  return 0;
+}
+function aplicarPistasAuto({ doCalc=true }={}){
+  const elPistas=document.querySelector("#pistas"); if(!elPistas) return false;
+  const produto=document.querySelector("#produto")?.value||'', largura=+document.querySelector("#largura")?.value||0;
+  const altura=+document.querySelector("#altura")?.value||0, espessura=+document.querySelector("#esp")?.value||0;
+  const coresN=+document.querySelector("#coresNum")?.value||0, chave=`${largura}x${altura}`;
+  const pistasCamiseta=produto==='Sacola Camiseta'?calcularPistasSacolaCamiseta(largura,espessura):0;
+  const pistasCilindro=produtoUsaLarguraComCilindro(produto)?getRepeticaoCilindroParaPistas(produto,largura,coresN):0;
+  const pistas=pistasCamiseta||pistasCilindro||(!produtoUsaLarguraComCilindro(produto)?tabelaPistas[chave]:0);
+  if(!pistas) return false;
+  if(+elPistas.value===+pistas) return false;
+  elPistas.value=pistas;
+  if(doCalc) calc();
+  return true;
+}
+function syncPistasSacolaCamiseta({ validarLargura=false }={}){
+  const produto=document.querySelector("#produto")?.value||'', elPistas=document.querySelector("#pistas");
+  if(!elPistas) return false;
+  if(produto!=='Sacola Camiseta'&&!produtoUsaLarguraComCilindro(produto)){ elPistas.readOnly=false; elPistas.removeAttribute('tabindex'); elPistas.title=''; return false; }
+  if(produto==='Sacola Camiseta'&&validarLargura) validarLarguraSacolaCamiseta({notify:false,doCalc:false});
+  if(produtoUsaLarguraComCilindro(produto)&&validarLargura) validarLarguraCilindroProdutos({notify:false,doCalc:false});
+  aplicarPistasAuto({doCalc:false});
+  elPistas.readOnly=true; elPistas.tabIndex=-1;
+  elPistas.title=produto==='Sacola Camiseta'?'Pistas automáticas para Sacola Camiseta':'Pistas automáticas conforme repetição do cilindro';
+  return true;
+}
+
+// === CLICHÊ ===
+const PRECO_CM2 = 0.17;
+function getNumCores(){ const el1=document.querySelector('#coresNum'); return +(el1?.value||0); }
+function getFacesCliche(){
+  const imp=document.querySelector('#imp')?.value||'', produto=document.querySelector('#produto')?.value||'';
+  if(/VERSO/.test(imp)&&produtoFrenteVersoPermiteAte6Cores(produto)) return 1;
+  return /VERSO/.test(imp)?2:1;
+}
+function getTotalCardsCliche(){ return getNumCores() * getFacesCliche(); }
+function renderCoresAreas(){
+  const n=getNumCores(), faces=getFacesCliche(), totalCards=n*faces;
+  const cont=document.querySelector('#coresAreas'); if(!cont) return;
+  const clicheSacoGelo=getClicheSacoGelo(document.querySelector('#produto')?.value||'',document.querySelector('#largura')?.value,document.querySelector('#altura')?.value,document.querySelector('#esp')?.value,document.querySelector('#sacoGeloKg')?.value);
+  const resetClicheSacoGelo=clicheSacoGelo&&cont.dataset.resetClicheSacoGelo==='1';
+  if(n===0){ cont.innerHTML=''; return; }
+  const prev={};
+  cont.querySelectorAll('[data-color-index]').forEach(card=>{ const i=+card.dataset.colorIndex; prev[i]={ face:card.dataset.face||'', L:+card.querySelector(`#corL_${i}`)?.value||0, A:+card.querySelector(`#corA_${i}`)?.value||0 }; });
+  cont.innerHTML='';
+  for(let i=1; i<=totalCards; i++){
+    const card=document.createElement('div');
+    card.className='cor-item'; card.dataset.colorIndex=i;
+    const corBase=((i-1)%n)+1;
+    const faceLabel=faces===2?(i<=n?'Frente':'Verso'):'';
+    const faceKey=faceLabel.toLowerCase(); card.dataset.face=faceKey;
+    const atual=prev[i]?.face===faceKey?prev[i]:null;
+    const duplicadoOrigem=faces===2&&i>n?prev[i-n]:null;
+    const Ldef=resetClicheSacoGelo?clicheSacoGelo.l:(atual?.L||duplicadoOrigem?.L||prev[i]?.L||clicheSacoGelo?.l||0);
+    const Adef=resetClicheSacoGelo?clicheSacoGelo.a:(atual?.A||duplicadoOrigem?.A||prev[i]?.A||clicheSacoGelo?.a||0);
+    card.innerHTML=`<h3>Cor ${corBase}${faceLabel?' - '+faceLabel:''}</h3>
+      <label>Largura (cm)</label><input id="corL_${i}" type="number" step="0.1" min="0" value="${Ldef}">
+      <label>Altura (cm)</label><input id="corA_${i}" type="number" step="0.1" min="0" value="${Adef}">`;
+    cont.appendChild(card);
+  }
+  if(resetClicheSacoGelo) cont.dataset.resetClicheSacoGelo='0';
+  cont.querySelectorAll('input').forEach(el=>{ el.addEventListener('input',calc,{passive:true}); el.addEventListener('change',calc,{passive:true}); });
+}
+function calcularCliche(){
+  const pistas=+(document.querySelector('#pistas')?.value||1), n=getNumCores(), faces=getFacesCliche(), totalCards=getTotalCardsCliche();
+  const clicheSacoGelo=getClicheSacoGelo(document.querySelector('#produto')?.value||'',document.querySelector('#largura')?.value,document.querySelector('#altura')?.value,document.querySelector('#esp')?.value,document.querySelector('#sacoGeloKg')?.value);
+  let areaTotal=0;
+  for(let i=1; i<=totalCards; i++){
+    const L=+(document.querySelector('#corL_'+i)?.value||0)||clicheSacoGelo?.l||0;
+    const A=+(document.querySelector('#corA_'+i)?.value||0)||clicheSacoGelo?.a||0;
+    areaTotal+=L*A;
+  }
+  if(n===0){
+    if(document.querySelector('#areaCliche')) document.querySelector('#areaCliche').textContent='0,00';
+    if(document.querySelector('#coresCliche')) document.querySelector('#coresCliche').textContent='0';
+    if(document.querySelector('#pistasCliche')) document.querySelector('#pistasCliche').textContent=pistas;
+    if(document.querySelector('#resultadoCliche')) document.querySelector('#resultadoCliche').textContent='R$ 0,00';
+    return 0;
+  }
+  const preco=areaTotal*PRECO_CM2*(pistas||1);
+  if(document.querySelector('#areaCliche')) document.querySelector('#areaCliche').textContent=br2(areaTotal);
+  if(document.querySelector('#coresCliche')) document.querySelector('#coresCliche').textContent=faces===2?`${totalCards} (${n} frente/verso)`:n;
+  if(document.querySelector('#pistasCliche')) document.querySelector('#pistasCliche').textContent=pistas;
+  if(document.querySelector('#resultadoCliche')) document.querySelector('#resultadoCliche').textContent='R$ '+br2(preco);
+  return preco;
+}
+
+// === TABELA AUTO CLICHÊ E PISTAS ===
+const tabelaCliche = {
+  "30x40":{L:16,A:18},"30x42":{L:16,A:18},"30x46":{L:16,A:20},
+  "40x50":{L:19,A:25},"38x50":{L:19,A:25},"38x48":{L:19,A:25},
+  "50x60":{L:20,A:25},"60x80":{L:28,A:30},"80x100":{L:28,A:30}
+};
+const tabelaPistas = {
+  "30x40":3,"30x42":3,"30x46":3,"40x50":2,"38x50":2,
+  "38x48":2,"50x60":2,"50x70":2,"60x80":1,"80x100":1
+};
+function aplicarClicheAuto({ doCalc=true }={}){
+  const largura=document.querySelector("#largura")?.value, altura=document.querySelector("#altura")?.value;
+  const chave=`${largura}x${altura}`;
+  if(!tabelaCliche[chave]) return false;
+  const {L,A}=tabelaCliche[chave];
+  const totalCores=(typeof getTotalCardsCliche==='function')?getTotalCardsCliche():getNumCores();
+  let mudou=false;
+  for(let i=1; i<=totalCores; i++){
+    const elL=document.querySelector(`#corL_${i}`), elA=document.querySelector(`#corA_${i}`);
+    if(!elL||!elA) continue;
+    if(+elL.value!==+L){ elL.value=L; mudou=true; }
+    if(+elA.value!==+A){ elA.value=A; mudou=true; }
+  }
+  if(mudou&&doCalc) calc();
+  return mudou;
+}
+function aplicarAutoPorTamanho(){
+  const mudouPistas=aplicarPistasAuto({doCalc:false}), mudouCliche=aplicarClicheAuto({doCalc:false});
+  if(mudouPistas||mudouCliche) calc();
+}
+function aplicarMilheirosMinimoAuto({ doCalc=true, forcar=false }={}){
+  const elMilh=document.querySelector("#milheiros"); if(!elMilh) return false;
+  const ehBobina=isBobinaProduto(), elMetros=document.querySelector("#metros");
+  const produto=document.querySelector("#produto")?.value||'', materialExibe=document.querySelector("#materialExibe")?.value||'';
+  const coresN=+document.querySelector("#coresNum")?.value||0, pedidoMinKg=coresN===0?100:150;
+  const L=+document.querySelector("#largura")?.value||0, A_base=ehBobina?100:(+document.querySelector("#altura")?.value||0);
+  const E=+document.querySelector("#esp")?.value||0;
+  const abaTotal=(typeof getAbaCm==='function')?(+getAbaCm()||0):0, A=A_base+(abaTotal/2);
+  if(!(L>0&&A>0&&E>0)) return false;
+  const pMil_kg=L*A*E; if(!(pMil_kg>0)) return false;
+  const unidadesMinKg=Math.ceil(((pedidoMinKg/pMil_kg)*1000)/500)*500;
+  const minUnEspecial=ehBobina?0:getMinUnEspecial({produto, materialExibe, largura:L, altura:A_base, esp:E});
+  const unidadesMin=Math.max(unidadesMinKg,minUnEspecial), milhMin=unidadesMin/1000;
+  if(ehBobina&&elMetros){
+    const metrosMin=metrosFromMilheiros(milhMin,A_base), metrosAtual=+elMetros.value||0;
+    if(!forcar&&Math.abs(metrosAtual-metrosMin)<1e-9) return false;
+    elMetros.value=fmtInputNum(metrosMin,2); elMilh.value=fmtInputNum(milhMin,6);
+  } else {
+    const milhAtual=+elMilh.value||0;
+    // Sempre aplica o mínimo quando forçado (mudança de medidas) ou quando abaixo do mínimo
+    if(!forcar&&milhAtual>=milhMin) return false;
+    elMilh.value=fmtInputNum(milhMin,6);
+  }
+  if(doCalc&&typeof calc==='function') calc();
+  return true;
+}
+function inicializarAutoCliche(){
+  aplicarAutoPorTamanho();
+  aplicarMilheirosMinimoAuto({doCalc:true});
+  const aplicarMilhTrusted=(ev)=>{ if(ev&&ev.isTrusted===false) return; aplicarMilheirosMinimoAuto({doCalc:true}); };
+  document.querySelector("#largura")?.addEventListener("change", aplicarAutoPorTamanho);
+  document.querySelector("#altura")?.addEventListener("change", aplicarAutoPorTamanho);
+  document.querySelector("#sacoGeloKg")?.addEventListener("change", aplicarAutoPorTamanho);
+  document.querySelector("#largura")?.addEventListener("change", aplicarMilhTrusted);
+  document.querySelector("#altura")?.addEventListener("change", aplicarMilhTrusted);
+  document.querySelector("#esp")?.addEventListener("change", aplicarMilhTrusted);
+  document.querySelector("#produto")?.addEventListener("change", aplicarMilhTrusted);
+  document.querySelector("#sacoGeloKg")?.addEventListener("change", aplicarMilhTrusted);
+  document.querySelector("#materialExibe")?.addEventListener("change", aplicarMilhTrusted);
+  document.querySelector("#abaSel")?.addEventListener("change", aplicarMilhTrusted);
+  document.querySelector("#abaCustom")?.addEventListener("change", aplicarMilhTrusted);
+  document.querySelector("#coresNum")?.addEventListener("change",()=>{ renderCoresAreas(); setTimeout(aplicarClicheAuto,50); });
+  document.querySelector("#coresNum")?.addEventListener("change", aplicarMilhTrusted);
+}
+
+// === PREENCHE SELECTS ===
+(function(){ const sel=$('#acresc'); for(let i=0;i<=100;i++){ const o=document.createElement('option'); o.value=i; o.textContent=i+'%'; sel.appendChild(o); } sel.value=0; })();
+(function(){
+  const s=$('#coresNum');
+  const o0=document.createElement('option'); o0.value=0; o0.textContent='Não (sem impressão)'; s.appendChild(o0);
+  for(let i=1;i<=6;i++){ const o=document.createElement('option'); o.value=i; o.textContent=i+(i===1?' cor':' cores'); s.appendChild(o); }
+  s.value=2;
+})();
+
+// === VALIDAÇÃO MILHEIRO MÍNIMO ===
+function validarMilheiroMinimo({ notify=true }={}){
+  const elMilh=document.querySelector('#milheiros'); if(!elMilh) return true;
+  const ehBobina=isBobinaProduto();
+  const L=+document.querySelector('#largura')?.value||0;
+  const A_base=ehBobina?100:(+document.querySelector('#altura')?.value||0);
+  const E=+document.querySelector('#esp')?.value||0;
+  const abaTotal=(typeof getAbaCm==='function')?(+getAbaCm()||0):0;
+  const A=A_base+(abaTotal/2);
+  const coresN=+document.querySelector('#coresNum')?.value||0;
+  const pedidoMinKg=coresN===0?100:150;
+  if(!(L>0&&A>0&&E>0)) return true;
+  const pMil_kg=L*A*E; if(!(pMil_kg>0)) return true;
+  const unidadesMinKg=Math.ceil(((pedidoMinKg/pMil_kg)*1000)/500)*500;
+  const milhMin=unidadesMinKg/1000;
+  const milhAtual=+elMilh.value||0;
+  if(milhAtual>=milhMin) return true;
+  elMilh.value=fmtInputNum(milhMin,6);
+  if(notify) showRegraToast(`Mínimo: ${milhMin} milheiros (${pedidoMinKg} kg).`, 2000);
+  calc();
+  return false;
+}
+
+// === CALC PRINCIPAL ===
+function calc(){
+  syncTipoNotaAlert();
+  syncSacoGeloUI({doCalc:false, aplicarPadrao:false});
+  syncPistasSacolaCamiseta();
+  syncLimiteCoresPorImpressao();
+  const produto=$('#produto').value, materialExibe=$('#materialExibe').value;
+  const material=MAP_PRECO[materialExibe]||'Virgem AD';
+  const cor=$('#corProduto').value, imp=$('#imp').value;
+  const coresN=+$('#coresNum').value||0;
+  const pedidoMinKg=coresN===0?100:150;
+  const coresFaixa=faixaCores(coresN);
+  const L=+$('#largura').value||0;
+  let A_base=+$('#altura').value||0;
+  const E=+$('#esp').value||0;
+  const ehBobina=isBobinaProduto(produto);
+  if(ehBobina){ A_base=100; if($('#altura')) $('#altura').value='100'; const metrosInformados=+($ ('#metros')?.value)||0; const milhEq=milheirosFromMetros(metrosInformados,A_base); if($('#milheiros')) $('#milheiros').value=fmtInputNum(milhEq,6); }
+  const abaTotal=getAbaCm(), A=A_base+(abaTotal/2);
+  const MILH=+$('#milheiros').value||0;
+  const acrescEl=$('#acresc');
+  const ADD=+acrescEl.value||0;
+  const area=L*A, vol=area*E, pUn_g=vol*1, pMil_kg=pUn_g, totalKg=pMil_kg*MILH;
+  const pesoReal=calcularPesoRealProduto({produto, largura:L, altura:A_base, pesoUnidadeG:pUn_g, milheiros:MILH});
+  const precoEspecialMilheiro=lookupMilheiroEspecial({produto, materialExibe, imp, coresN, largura:L, altura:A_base, esp:E, milheiros:MILH});
+  const precoKgTabela=lookup(material,imp,coresFaixa,totalKg);
+  const fatorKgEl=$('#fkg0');
+  if(fatorKgEl) fatorKgEl.dataset.manual='0';
+  // Ajusta o valor por kg: se não houver impressão e não for PP, reduz R$2,00
+  let precoKgAuto=precoKgTabela;
+  if(coresN===0&&materialExibe!=='Polipropileno (PP)') precoKgAuto=precoKgTabela-2;
+  let milBaseAuto=precoKgAuto*pMil_kg;
+  if(precoEspecialMilheiro){ milBaseAuto=precoEspecialMilheiro.valorMilheiro; precoKgAuto=pMil_kg>0?(milBaseAuto/pMil_kg):0; }
+  // Regra comercial: abaixo de 1,5 kg por milheiro, soma R$3,00 no fator kg
+  const adicionalFatorKg=(pMil_kg>0&&pMil_kg<1.5)?3:0;
+  const adicionalMilBaixoPeso=adicionalFatorKg*pMil_kg;
+  const milBaseAutoComBaixoPeso=milBaseAuto+adicionalMilBaixoPeso;
+  const fitaExtraMil=L*getFitaRate();
+  const p=1+ADD/100;
+  const milAuto=milBaseAutoComBaixoPeso+fitaExtraMil;
+  const fkgAuto=totalKg?(milAuto*MILH)/totalKg:0;
+  const precoKgFinal=precoKgAuto;
+  const milBase=milBaseAuto;
+  const milBaseComBaixoPeso=milBase+adicionalMilBaixoPeso;
+  let mil=milBaseComBaixoPeso+fitaExtraMil;
+  let un=mil/1000, tot=mil*MILH, fkg=totalKg?tot/totalKg:0;
+  let milX=(milBaseComBaixoPeso*p)+fitaExtraMil;
+  let unX=milX/1000, totX=milX*MILH, fkgX=totalKg?totX/totalKg:0;
+  const valorCliche=calcularCliche();
+  const totFinal=totX+valorCliche;
+  const totFinalBR=br2(totFinal);
+  // KPIs
+  $('#kArea').textContent=br2(area); $('#kVol').textContent=br2(vol);
+  $('#kPU').textContent=br2(pUn_g); $('#kPUReal').textContent=br2(pesoReal.pesoUnidadeRealG);
+  $('#kPM').textContent=br2(pMil_kg); $('#kPMReal').textContent=br2(pesoReal.pesoMilheiroRealKg);
+  $('#kQKg').textContent=br2(totalKg); $('#kQKgReal').textContent=br2(pesoReal.pesoTotalRealKg);
+  $('#kPkg').textContent=br2(precoKgFinal);
+  // Resultados
+  $('#un0').textContent='R$ '+br2(un); $('#mil0').textContent='R$ '+br2(mil);
+  $('#tot0').textContent='R$ '+br2(tot);
+  if(fatorKgEl&&document.activeElement!==fatorKgEl) fatorKgEl.value=br2(fkg);
+  $('#un1').textContent='R$ '+br2(unX); $('#mil1').textContent='R$ '+br2(milX);
+  $('#tot1').textContent='R$ '+totFinalBR; $('#fkg1').textContent='R$ '+br2(fkgX);
+  // Alertas
+  $('#alerta').style.display=totalKg<pedidoMinKg?'block':'none';
+  const alertaPesoMilEl=$('#alertaPesoMilheiro');
+  if(alertaPesoMilEl) alertaPesoMilEl.style.display=adicionalFatorKg>0?'block':'none';
+  const alertaPrecoEspecialEl=$('#alertaPrecoEspecial');
+  if(alertaPrecoEspecialEl){
+    if(precoEspecialMilheiro){ alertaPrecoEspecialEl.innerHTML=`Preço especial aplicado: <b>R$ ${br2(precoEspecialMilheiro.valorMilheiro)}</b>/milheiro (faixa a partir de ${br0(precoEspecialMilheiro.minUnFaixa)} un).`; alertaPrecoEspecialEl.style.display='block'; }
+    else { alertaPrecoEspecialEl.style.display='none'; alertaPrecoEspecialEl.innerHTML=''; }
+  }
+  const alertaFatorManualEl=$('#alertaFatorManual');
+  if(alertaFatorManualEl){ alertaFatorManualEl.style.display='none'; alertaFatorManualEl.innerHTML=''; }
+  const alertaPistasVersoEl=$('#alertaPistasVerso');
+  if(alertaPistasVersoEl){
+    const frenteVerso=/VERSO/.test(imp);
+    if(frenteVerso){ alertaPistasVersoEl.textContent=produtoFrenteVersoPermiteAte6Cores(produto)?'⚠️ Frente/verso em folha.':'⚠️ Frente/verso Selecionado.'; alertaPistasVersoEl.style.display='block'; }
+    else alertaPistasVersoEl.style.display='none';
+  }
+  atualizarAlertaCilindro(produto,L,A_base,coresN);
+  const minKgEl=document.querySelector('#minKgTxt'); if(minKgEl) minKgEl.textContent=pedidoMinKg;
+  const minMilhEl=document.querySelector('#minMilhTxt'); if(minMilhEl) minMilhEl.textContent=pMil_kg>0?br2(Math.ceil((pedidoMinKg/pMil_kg*1000)/500)*500/1000):'—';
+  // Proposta
+  const qtdUn=Math.round(MILH*1000), qtdM=metrosFromMilheiros(MILH,A_base);
+  const minUnKg=Math.ceil((pedidoMinKg/pMil_kg)*1000/500)*500;
+  const minUnEspecial=ehBobina?0:getMinUnEspecial({produto, materialExibe, largura:L, altura:A_base, esp:E});
+  const minUn=Math.max(minUnKg,minUnEspecial);
+  const txtQtd=ehBobina?`${br2(qtdM)} m`:`${br0(qtdUn)} un. (${br0(MILH)} milheiros)`;
+  const txtMin=ehBobina?`${br2(metrosFromMilheiros(minUn/1000,A_base))} metros`:`${br0(minUn)} unidades`;
+  const lado=/VERSO/.test(imp)?'frente/verso':'frente';
+  const pistas=+$('#pistas').value||1;
+  const faces=typeof getFacesCliche==='function'?getFacesCliche():(/VERSO/.test(imp)?2:1);
+  const dimensoesClicheTxt=getDimensoesClicheTexto(coresN);
+  const coresClicheProposta=faces===2?coresN*2:coresN;
+  const textoArr=montarPropostaEscritaItem({produto, materialExibe, largura:L, altura:A_base, esp:E, cor, coresN, lado, milheiro:milX, unitario:unX, totalProduto:totX, valorCliche, totalFinal:totFinal, dimensoesClicheTxt, coresCliche:coresClicheProposta, minUn, milheiros:MILH, ehBobina, qtdM, tipoNota:getTipoNotaPavao()});
+  $('#preview').textContent=textoArr.join('\n');
+}
+
+// Modal e botões
+function setModalTitle(txt){ const t=document.querySelector('#mTitle'); if(t) t.textContent=(txt||'Proposta Comercial'); }
+function openModal(title){ if(title) setModalTitle(title); $('#modal').classList.add('show'); }
+function closeModal(){ $('#modal').classList.remove('show'); }
+function copyProposta(){
+  const el=$('#preview');
+  if(navigator.clipboard&&window.isSecureContext){ return navigator.clipboard.writeText(el.textContent); }
+  const r=document.createRange(); r.selectNodeContents(el); const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); try{document.execCommand('copy');}catch(e){} s.removeAllRanges();
+}
+function showToast(){ const t=$('#toast'); t.textContent='✅ Proposta copiada!'; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1300); }
+function fmtMedidaCm(n){ const num=+n; if(!isFinite(num)) return '0'; if(Math.abs(num-Math.round(num))<1e-9) return String(Math.round(num)); return num.toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:2}); }
+
+// Event listeners
+$$('input,select').forEach(el=>{ el.addEventListener('input',calc); el.addEventListener('change',calc); });
+$('#tipoNotaPavao')?.addEventListener('change', syncTipoNotaAlert);
+syncTipoNotaAlert();
+$('#produto')?.addEventListener('change',()=>{ syncAbaUI(); syncSacoGeloUI(); syncBobinaUI(); syncLimiteCoresPorImpressao({render:true}); validarLarguraSacolaCamiseta({notify:true,doCalc:false}); validarAlturaCilindroSacolaCamiseta({notify:true,doCalc:false}); validarLarguraCilindroProdutos({notify:true,doCalc:false}); validarAlturaFrenteVersoCilindroProdutos({notify:true,doCalc:false}); calc(); });
+$('#largura')?.addEventListener('change',()=>{ validarLarguraSacolaCamiseta(); validarLarguraCilindroProdutos(); validarAlturaFrenteVersoCilindroProdutos(); syncPistasSacolaCamiseta(); aplicarMilheirosMinimoAuto({doCalc:true, forcar:true}); });
+$('#largura')?.addEventListener('blur',()=>{ validarLarguraSacolaCamiseta(); validarLarguraCilindroProdutos(); validarAlturaFrenteVersoCilindroProdutos(); syncPistasSacolaCamiseta(); aplicarMilheirosMinimoAuto({doCalc:true, forcar:true}); });
+$('#altura')?.addEventListener('change',()=>{ validarAlturaCilindroSacolaCamiseta(); validarAlturaFrenteVersoCilindroProdutos(); aplicarMilheirosMinimoAuto({doCalc:true, forcar:true}); });
+$('#altura')?.addEventListener('blur',()=>{ validarAlturaCilindroSacolaCamiseta(); validarAlturaFrenteVersoCilindroProdutos(); aplicarMilheirosMinimoAuto({doCalc:true, forcar:true}); });
+$('#esp')?.addEventListener('change',()=>{ validarEspessuraMinima(); syncPistasSacolaCamiseta(); aplicarMilheirosMinimoAuto({doCalc:true, forcar:true}); });
+$('#esp')?.addEventListener('blur',()=>{ validarEspessuraMinima(); syncPistasSacolaCamiseta(); aplicarMilheirosMinimoAuto({doCalc:true, forcar:true}); });
+$('#pistas')?.addEventListener('input',()=>{ syncPistasSacolaCamiseta(); });
+$('#pistas')?.addEventListener('change',()=>{ syncPistasSacolaCamiseta(); });
+$('#imp')?.addEventListener('change',()=>{ syncLimiteCoresPorImpressao(); validarLarguraCilindroProdutos({notify:true,doCalc:false}); validarAlturaFrenteVersoCilindroProdutos({notify:true,doCalc:false}); if(typeof renderCoresAreas==='function') renderCoresAreas(); if(typeof aplicarClicheAuto==='function') setTimeout(aplicarClicheAuto,50); calc(); });
+$('#coresNum')?.addEventListener('change',()=>{ validarAlturaCilindroSacolaCamiseta({notify:true,doCalc:false}); validarLarguraCilindroProdutos({notify:true,doCalc:false}); validarAlturaFrenteVersoCilindroProdutos({notify:true,doCalc:false}); syncPistasSacolaCamiseta(); calc(); });
+$('#abaSel')?.addEventListener('change',()=>{ syncAbaUI(); calc(); });
+$('#fitaSel')?.addEventListener('change',()=>{ calc(); });
+$('#sacoGeloKg')?.addEventListener('change',()=>{ aplicarTamanhoSacoGelo(); renderCoresAreas?.(); validarLarguraCilindroProdutos({notify:true,doCalc:false}); syncPistasSacolaCamiseta(); calc(); });
+$('#abaCustom')?.addEventListener('input',()=>{ calc(); });
+$('#btnTabelaCilindros')?.addEventListener('click',()=>{ window.open(URL_TABELA_CILINDROS_PDF,'_blank','noopener,noreferrer'); });
+$('#btnProposta').addEventListener('click',()=>{ calc(); openModal('Proposta Comercial (Item)'); });
+$('#btnClose').addEventListener('click',closeModal);
+$('#btnCopy').addEventListener('click',()=>{ copyProposta(); showToast(); });
+$('#milheiros')?.addEventListener('blur',()=>{ validarMilheiroMinimo(); });
+$('#milheiros')?.addEventListener('change',()=>{ validarMilheiroMinimo(); });
+$('#btnResetFreteAcresc')?.addEventListener('click',()=>{ const acresc=$('#acresc'); if(acresc) acresc.value=0; calc(); });
+syncAbaUI(); syncSacoGeloUI(); syncBobinaUI();
+
+document.addEventListener('scroll',()=>{
+  const btn=document.querySelector('.top button');
+  if(window.scrollY>150){ if(btn) btn.style.opacity='1'; } else { if(btn) btn.style.opacity='0'; }
+});
+document.addEventListener('DOMContentLoaded',()=>{
+  syncLimiteCoresPorImpressao({render:false}); renderCoresAreas();
+  const coresSelect=document.querySelector('#coresNum');
+  if(coresSelect) coresSelect.addEventListener('change',renderCoresAreas);
+});
+
+// === MULTI-ITENS ===
+const itensPedido = [];
+let editingId = null;
+function brMoney(n){ return 'R$ '+(isNaN(n)?0:n).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function toNumBRL(text){ if(!text) return 0; return +String(text).replace(/[^\d,.-]/g,'').replace(/\./g,'').replace(',','.') || 0; }
+function getPedidoMinimoItemTxt(it){
+  const itemEhBobina=!!it?.ehBobina||isBobinaProduto(it?.produto), largura=+it?.L||0, alturaBase=itemEhBobina?100:(+it?.A||0);
+  const abaTotal=+it?.abaTotal||0, alturaCalculo=itemEhBobina?100:(it?.produto==='Saco com Aba'?(+it?.Acalc||(alturaBase+(abaTotal/2))):alturaBase);
+  const esp=+it?.E||0, coresN=+it?.coresN||0, pedidoMinKg=coresN===0?100:150;
+  if(!(largura>0&&alturaCalculo>0&&esp>0)) return '';
+  const pMilKg=largura*alturaCalculo*esp; if(!(pMilKg>0)) return '';
+  const minUnKg=Math.ceil((pedidoMinKg/pMilKg)*1000/500)*500;
+  const minUnEspecial=itemEhBobina?0:getMinUnEspecial({produto:it?.produto||'', materialExibe:it?.material||'', largura, altura:alturaBase, esp});
+  const minUn=Math.max(minUnKg,minUnEspecial), minM=metrosFromMilheiros(minUn/1000,alturaBase);
+  return itemEhBobina?`${br2(minM)} metros`:`${br0(minUn)} unidades`;
+}
+function setEditMode(isOn){
+  const btnAdd=document.querySelector('#btnAddItem'), btnCancel=document.querySelector('#btnCancelarEdicao');
+  if(btnAdd) btnAdd.textContent=isOn?'Atualizar item':'Adicionar item';
+  if(btnCancel) btnCancel.style.display=isOn?'':'none';
+}
+function snapshotItemAtual(){
+  if(typeof calc==='function') calc();
+  const produto=document.querySelector('#produto')?.value||'', material=document.querySelector('#materialExibe')?.value||'';
+  const cor=document.querySelector('#corProduto')?.value||'', imp=document.querySelector('#imp')?.value||'';
+  const coresN=+document.querySelector('#coresNum')?.value||0, L=+document.querySelector('#largura')?.value||0;
+  const A=+document.querySelector('#altura')?.value||0, E=+document.querySelector('#esp')?.value||0;
+  const MILH=+document.querySelector('#milheiros')?.value||0, pistas=+document.querySelector('#pistas')?.value||1;
+  const faces=typeof getFacesCliche==='function'?getFacesCliche():(/VERSO/.test(imp)?2:1);
+  const abaTotal=(typeof getAbaCm==='function')?(+getAbaCm()||0):0;
+  const fitaTipo=(typeof getFitaTipo==='function')?(getFitaTipo()||'nenhuma'):'nenhuma';
+  const fitaLabel=(typeof getFitaLabel==='function')?(getFitaLabel()||'Sem'):'Sem';
+  const Acalc=A+(abaTotal/2);
+  const unTxt=document.querySelector('#un1')?.textContent||'R$ 0,00', milTxt=document.querySelector('#mil1')?.textContent||'R$ 0,00';
+  const totTxt=document.querySelector('#tot1')?.textContent||'R$ 0,00', clicheTxt=document.querySelector('#resultadoCliche')?.textContent||'R$ 0,00';
+  const un=toNumBRL(unTxt), mil=toNumBRL(milTxt), totalItem=toNumBRL(totTxt), valorCliche=toNumBRL(clicheTxt);
+  const qtdUn=Math.round(MILH*1000), ehBobina=isBobinaProduto(produto);
+  const qtdM=ehBobina?(+document.querySelector('#metros')?.value||metrosFromMilheiros(MILH,100)):metrosFromMilheiros(MILH,A);
+  const lado=/VERSO/.test(imp)?'frente/verso':'frente';
+  const dimensoesClicheTxt=(typeof getDimensoesClicheTexto==='function')?getDimensoesClicheTexto(coresN):`${L}cm x ${Acalc}cm`;
+  const pedidoMinTxt=getPedidoMinimoItemTxt({produto, material, L, A, E, coresN, ehBobina, Acalc, abaTotal});
+  const sacoGeloKg=isSacoParaGelo(produto)?(document.querySelector('#sacoGeloKg')?.value||getSacoGeloKgPorMedidas(L,A,E)):'';
+  return { id:editingId||(crypto?.randomUUID?crypto.randomUUID():String(Date.now()+Math.random())), produto, material, cor, L, A, E, sacoGeloKg, imp, coresN, lado, MILH, qtdUn, ehBobina, qtdM, pistas, faces, Acalc, abaTotal, fitaTipo, fitaLabel, pedidoMinTxt, dimensoesClicheTxt, valorCliche, un, mil, totalItem };
+}
+function loadItemToForm(it){
+  const setVal=(sel,val)=>{ const el=document.querySelector(sel); if(!el) return; el.value=val; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); };
+  setVal('#produto',it.produto); setVal('#materialExibe',it.material); setVal('#corProduto',it.cor);
+  setVal('#largura',it.L); setVal('#altura',it.A); setVal('#esp',it.E); setVal('#milheiros',it.MILH);
+  if(it.produto==='Saco para Gelo'){ setVal('#sacoGeloKg',it.sacoGeloKg||getSacoGeloKgPorMedidas(it.L,it.A,it.E)); setVal('#materialExibe',it.material); setVal('#corProduto',it.cor); setVal('#largura',it.L); setVal('#altura',it.A); setVal('#esp',it.E); }
+  if(it.produto==='Saco com Aba'){
+    const abaSel=document.querySelector('#abaSel'), abaCustom=document.querySelector('#abaCustom'), abaTotal=+it.abaTotal||0;
+    if(abaSel){ const temOpcao=Array.from(abaSel.options).some(opt=>opt.value!=='custom'&&Math.abs((+opt.value||0)-abaTotal)<1e-9); setVal('#abaSel',temOpcao?String(abaTotal):'custom'); if(abaCustom){ abaCustom.value=temOpcao?'':fmtInputNum(abaTotal,2); abaCustom.dispatchEvent(new Event('input',{bubbles:true})); abaCustom.dispatchEvent(new Event('change',{bubbles:true})); } }
+    if(it.fitaTipo) setVal('#fitaSel',it.fitaTipo);
+  }
+  const itemEhBobina=!!it.ehBobina||isBobinaProduto(it.produto);
+  if(itemEhBobina){ const metrosItem=isFinite(+it.qtdM)?(+it.qtdM||0):metrosFromMilheiros(it.MILH,100); setVal('#metros',fmtInputNum(metrosItem,2)); }
+  else { const metrosEl=document.querySelector('#metros'); if(metrosEl) metrosEl.value='0'; }
+  setVal('#coresNum',it.coresN); setVal('#imp',it.imp);
+  if(it.pistas!==undefined) setVal('#pistas',it.pistas);
+  if(typeof calc==='function') calc();
+}
+function renderListaItens(){
+  const box=document.querySelector('#listaItens'), outTotal=document.querySelector('#totalGeralItens');
+  if(!box||!outTotal) return;
+  if(itensPedido.length===0){ box.innerHTML=`<div style="color:rgba(255,255,255,.75);font-size:13px">Nenhum item adicionado ainda.</div>`; outTotal.textContent=brMoney(0); return; }
+  let soma=0;
+  box.innerHTML=itensPedido.map((it,idx)=>{
+    soma+=it.totalItem;
+    const isEdit=editingId===it.id;
+    const border=isEdit?'2px solid rgba(232,66,10,.9)':'1px solid rgba(255,255,255,.14)';
+    const bg=isEdit?'rgba(232,66,10,.10)':'transparent';
+    const itemEhBobina=!!it.ehBobina||isBobinaProduto(it.produto);
+    const itemQtdM=itemEhBobina?(isFinite(+it.qtdM)?(+it.qtdM||0):metrosFromMilheiros(it.MILH,100)):0;
+    return `<div class="line" style="align-items:flex-start;cursor:pointer;border:${border};background:${bg};padding:10px;border-radius:12px;margin-bottom:10px" onclick="editarItemPedido('${it.id}')">
+        <div style="max-width:72%">
+          <div style="font-weight:800">${idx+1}) ${getNomeProdutoProposta({produto:it.produto, largura:it.L, altura:it.A, esp:it.E, sacoGeloKg:it.sacoGeloKg, coresN:it.coresN})} ${itemEhBobina?`(${fmtMedidaCm(it.L)} cm)`:`(${it.L}×${it.A} cm)`}</div>
+          <div style="color:rgba(255,255,255,.75);font-size:13px">Material: ${it.material} | Cor: ${getCorProdutoProposta(it.produto,it.cor)} | Esp: ${String(it.E).replace('.',',')}mm${it.coresN>0?` | ${it.coresN} ${it.coresN===1?'cor':'cores'} (${it.lado})`:' | sem impressão'}</div>
+          <div style="color:rgba(255,255,255,.75);font-size:13px">${itemEhBobina?`Qtd: ${br2(itemQtdM)} m`:`Qtd: ${it.qtdUn.toLocaleString('pt-BR')} un. (${it.MILH.toLocaleString('pt-BR')} milheiros)`}</div>
+          <div style="color:rgba(255,255,255,.85);font-size:13px">Unit: ${brMoney(it.un)} | Milheiro: ${brMoney(it.mil)}</div>
+          <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:6px">Clique para editar</div>
+        </div>
+        <div style="text-align:right">
+          <div class="mono" style="font-weight:900">${brMoney(it.totalItem)}</div>
+          <button class="btn secondary" style="margin-top:8px;width:auto;padding:8px 10px" onclick="event.stopPropagation();removerItemPedido('${it.id}')">Remover</button>
+        </div>
+      </div>`;
+  }).join('');
+  outTotal.textContent=brMoney(soma);
+}
+function removerItemPedido(id){
+  const i=itensPedido.findIndex(x=>x.id===id); if(i>=0) itensPedido.splice(i,1);
+  if(editingId===id){ editingId=null; setEditMode(false); }
+  renderListaItens();
+}
+function editarItemPedido(id){
+  const it=itensPedido.find(x=>x.id===id); if(!it) return;
+  editingId=id; setEditMode(true); loadItemToForm(it); renderListaItens();
+  window.scrollTo({top:0,behavior:'smooth'});
+  const t=document.querySelector('#toast'); if(t){ t.textContent='✏️ Editando item...'; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1000); }
+}
+function cancelarEdicao(){
+  editingId=null; setEditMode(false); renderListaItens();
+  const t=document.querySelector('#toast'); if(t){ t.textContent='✅ Edição cancelada.'; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1100); }
+}
+function salvarOuAtualizarItem(){
+  const item=snapshotItemAtual();
+  if(editingId){ const i=itensPedido.findIndex(x=>x.id===editingId); if(i>=0) itensPedido[i]=item; editingId=null; setEditMode(false); const t=document.querySelector('#toast'); if(t){ t.textContent='✅ Item atualizado!'; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1100); } }
+  else { itensPedido.push(item); const t=document.querySelector('#toast'); if(t){ t.textContent='✅ Item adicionado!'; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1100); } }
+  renderListaItens();
+}
+function gerarPropostaFinalMulti(){
+  if(itensPedido.length===0){ const t=document.querySelector('#toast'); if(t){ t.textContent='⚠️ Adicione pelo menos 1 item.'; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1300); } return; }
+  const totalGeral=itensPedido.reduce((s,it)=>s+it.totalItem,0);
+  const linhasItens=itensPedido.map((it,idx)=>montarPropostaEscritaPedidoItem(it,idx)).join('\n\n');
+  const textoFinal=['PROPOSTA – PLASTCUSTOM','',linhasItens,'','══════════════════════════════════════',linhaPontilhadaProposta('TOTAL DO PEDIDO',`${brMoney(totalGeral)}${getSufixoIpiProposta(getTipoNotaPavao())}`,52)].join('\n');
+  const preview=document.querySelector('#preview'); if(preview) preview.textContent=textoFinal;
+  if(typeof openModal==='function') openModal('Proposta Comercial (Pedido)');
+}
+
+document.querySelector('#btnAddItem')?.addEventListener('click', salvarOuAtualizarItem);
+document.querySelector('#btnPropostaFinal')?.addEventListener('click', gerarPropostaFinalMulti);
+document.querySelector('#btnLimparItens')?.addEventListener('click',()=>{
+  itensPedido.length=0; editingId=null; setEditMode(false); renderListaItens();
+  const t=document.querySelector('#toast'); if(t){ t.textContent='🧹 Itens limpos.'; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1100); }
+});
+document.querySelector('#btnCancelarEdicao')?.addEventListener('click', cancelarEdicao);
+
+// Inicialização
+document.addEventListener('DOMContentLoaded',()=>{
+  inicializarAutoCliche();
+  let tentativas=0;
+  const interval=setInterval(()=>{ aplicarClicheAuto(); tentativas++; if(tentativas>10) clearInterval(interval); }, 200);
+});
+
+renderListaItens();
+setEditMode(false);
+calc();
+</script>
+</body>
+</html>
