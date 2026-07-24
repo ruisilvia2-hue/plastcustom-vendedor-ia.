@@ -139,5 +139,72 @@ class TestFerramentasDaIA(unittest.TestCase):
         self.assertIn("pedido_minimo_milheiros", resultado)
 
 
+class TestMemoriaEstruturadaDoPedido(unittest.TestCase):
+    """Testa a peça central da nova arquitetura: processar_item_pedido (usada por
+    atualizar_pedido) - suporte a múltiplos itens, sem repetir perguntas já respondidas."""
+
+    def test_item_completo_gera_preco_preview(self):
+        r = app.processar_item_pedido({
+            "produto": "Sacola Vazada", "material": "Virgem BD", "cor_produto": "Azul",
+            "largura": 40, "altura": 50, "espessura": 0.008, "cores_n": 3,
+            "impressao": "FRENTE", "milheiros": 30,
+        })
+        self.assertTrue(r["completo"])
+        self.assertEqual(r["faltando"], [])
+        self.assertIsNotNone(r["preco_preview"])
+        self.assertGreater(r["preco_preview"]["preco_total"], 0)
+
+    def test_item_incompleto_lista_o_que_falta(self):
+        r = app.processar_item_pedido({"produto": "Sacola Vazada", "largura": 40, "altura": 50})
+        self.assertFalse(r["completo"])
+        self.assertIn("espessura", r["faltando"])
+        self.assertIn("cores_n", r["faltando"])
+        self.assertIn("milheiros", r["faltando"])
+        self.assertIsNone(r["preco_preview"])
+
+    def test_item_ajusta_tamanho_fora_de_faixa_automaticamente(self):
+        # Sacola Camiseta só aceita larguras específicas - 37 não é uma delas
+        r = app.processar_item_pedido({
+            "produto": "Sacola Camiseta", "largura": 37, "altura": 40, "cores_n": 1,
+        })
+        self.assertIn(r["item"]["largura"], app.LARGURAS_SACOLA_CAMISETA_PERMITIDAS)
+        self.assertTrue(len(r["ajustes"]) >= 1)
+
+    def test_multiplos_itens_sao_processados_independentemente(self):
+        """Simula o cenário pedido pelo usuário: cliente informa vários tamanhos numa mensagem só."""
+        entrada = {
+            "itens": [
+                {"produto": "Sacola Vazada", "material": "Virgem BD", "largura": 30, "altura": 40,
+                 "espessura": 0.008, "cores_n": 0, "impressao": "FRENTE", "milheiros": 30},
+                {"produto": "Sacola Vazada", "material": "Virgem BD", "largura": 40, "altura": 50,
+                 "espessura": 0.008, "cores_n": 0, "impressao": "FRENTE", "milheiros": 30},
+                {"produto": "Sacola Vazada", "material": "Virgem BD", "largura": 50, "altura": 50,
+                 "espessura": 0.008, "cores_n": 0, "impressao": "FRENTE", "milheiros": 30},
+            ]
+        }
+        resultado = app.executar_atualizar_pedido(conversa_id="00000000-0000-0000-0000-000000000000", entrada=entrada)
+        self.assertEqual(resultado["total_itens"], 3)
+        # cada item tem preço calculado de forma independente
+        precos = [it["preco_preview"]["preco_total"] for it in resultado["itens"]]
+        self.assertEqual(len(set(precos)), 3)  # tamanhos diferentes -> preços diferentes
+
+    def test_material_invalido_e_descartado_sem_quebrar(self):
+        r = app.processar_item_pedido({"produto": "Sacola Vazada", "material": "Material Inventado", "largura": 40, "altura": 50})
+        self.assertIsNone(r["item"]["material"])  # não aceita valor fora da lista, mas não quebra
+
+    def test_nao_recalcula_preco_se_faltar_qualquer_campo_obrigatorio(self):
+        campos = ["produto", "largura", "altura", "espessura", "cores_n", "impressao", "milheiros"]
+        base = {
+            "produto": "Sacola Vazada", "largura": 40, "altura": 50, "espessura": 0.008,
+            "cores_n": 3, "impressao": "FRENTE", "milheiros": 30,
+        }
+        for campo in campos:
+            incompleto = {k: v for k, v in base.items() if k != campo}
+            with self.subTest(campo_faltando=campo):
+                r = app.processar_item_pedido(incompleto)
+                self.assertFalse(r["completo"])
+                self.assertIsNone(r["preco_preview"])
+
+
 if __name__ == "__main__":
     unittest.main()
