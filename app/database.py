@@ -70,7 +70,18 @@ def buscar_ou_criar_cliente(telefone: str) -> Dict[str, Any]:
 def buscar_ou_criar_conversa(cliente_id: str) -> Dict[str, Any]:
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM conversas WHERE cliente_id=%s AND status='ativa' ORDER BY inicio DESC LIMIT 1", (cliente_id,))
+    # Considera uma conversa "continuável" se estiver 'ativa' OU se teve mensagem
+    # recente (últimos 30 minutos) mesmo já 'fechada' - isso evita o seguinte bug:
+    # cliente fecha o pedido, manda "obrigado" 20 segundos depois, e o robô trata
+    # isso como um cliente novo (saudação do zero, nota de privacidade de novo).
+    # Só depois de passar esse tempo sem nenhuma mensagem é que uma conversa nova
+    # de verdade é criada (aí sim faz sentido resetar tudo).
+    cur.execute("""
+        SELECT * FROM conversas
+        WHERE cliente_id=%s
+          AND (status='ativa' OR ultima_mensagem > NOW() - INTERVAL '30 minutes')
+        ORDER BY ultima_mensagem DESC LIMIT 1
+    """, (cliente_id,))
     c = cur.fetchone()
     if not c:
         cur.execute("INSERT INTO conversas (cliente_id) VALUES (%s) RETURNING *", (cliente_id,))
