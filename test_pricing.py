@@ -117,22 +117,42 @@ class TestFerramentasDaIA(unittest.TestCase):
         self.assertIn("preco_total", resultado)
         self.assertGreater(resultado["preco_total"], 0)
 
-    def test_calcular_orcamento_abaixo_do_minimo_retorna_erro_sem_preco(self):
+    def test_calcular_orcamento_abaixo_do_minimo_retorna_fora_da_faixa(self):
         resultado = tools_app.executar_calcular_orcamento({
             "produto": "Sacola Vazada", "material": "Virgem BD", "largura": 40, "altura": 50,
             "espessura": 0.008, "cores_n": 3, "impressao": "FRENTE", "milheiros": 1,
         })
-        self.assertIn("erro", resultado)
+        self.assertEqual(resultado.get("erro"), "fora_da_faixa")
+        self.assertIn("mensagem", resultado)
+        self.assertIn("sugestoes", resultado)
         self.assertNotIn("preco_total", resultado)
 
-    def test_calcular_orcamento_dado_malformado_nao_derruba_o_servidor(self):
+    def test_calcular_orcamento_dado_malformado_retorna_valor_invalido(self):
         """Se a IA mandar um valor no formato errado, tem que devolver erro tratado,
         nunca deixar uma exceção crua estourar (que derrubaria a resposta ao cliente)."""
         resultado = tools_app.executar_calcular_orcamento({
             "produto": "Sacola Vazada", "largura": "não é um número", "altura": 50,
             "espessura": 0.008, "cores_n": 3, "impressao": "FRENTE", "milheiros": 30,
         })
-        self.assertIn("erro", resultado)
+        self.assertEqual(resultado.get("erro"), "valor_invalido")
+        self.assertIn("mensagem", resultado)
+
+    def test_calcular_orcamento_sem_campos_obrigatorios_retorna_dados_incompletos(self):
+        resultado = tools_app.executar_calcular_orcamento({
+            "produto": "Sacola Vazada", "largura": 40, "altura": 50,
+            # faltando: espessura, cores_n, milheiros
+        })
+        self.assertEqual(resultado.get("erro"), "dados_incompletos")
+        self.assertIn("mensagem", resultado)
+        self.assertEqual(set(resultado.get("campos_faltando", [])), {"espessura", "cores_n", "milheiros"})
+
+    def test_calcular_orcamento_produto_desconhecido_retorna_valor_invalido(self):
+        resultado = tools_app.executar_calcular_orcamento({
+            "produto": "Sacola Que Não Existe", "largura": 40, "altura": 50,
+            "espessura": 0.008, "cores_n": 3, "impressao": "FRENTE", "milheiros": 30,
+        })
+        self.assertEqual(resultado.get("erro"), "valor_invalido")
+        self.assertIn("campos_faltando", resultado)
 
     def test_consultar_pedido_minimo_caso_normal(self):
         resultado = tools_app.executar_consultar_pedido_minimo({
