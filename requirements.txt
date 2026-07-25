@@ -2,5 +2,7 @@ anthropic
 psycopg2-binary
 requests
 flask
+flask-limiter
 gunicorn
+pytest
 
