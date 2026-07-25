@@ -8,6 +8,8 @@ ferramenta correspondente. As notificações (fechar_pedido, transferir_para_con
 solicitar_privacidade) são disparadas de dentro do loop de ferramentas em app/ia.py,
 não aqui - este módulo cuida só do cálculo/validação dos dados do pedido.
 """
+from typing import Any, Dict
+
 from app.config import logger, PRODUTOS_VALIDOS, MATERIAIS_VALIDOS, CORES_PRODUTO_VALIDAS
 from app.precos import (
     ajustar_tamanho, espessura_mais_proxima, calcular_preco, calcular_pedido_minimo,
@@ -16,7 +18,7 @@ from app.precos import (
 from app.database import salvar_estado_pedido
 
 
-def executar_atualizar_pedido(conversa_id, entrada):
+def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict[str, Any]:
     """Executa a ferramenta 'atualizar_pedido': é o coração da memória estruturada da
     conversa. Recebe TODOS os itens que a IA já sabe sobre o pedido (um ou vários
     tamanhos/produtos), valida/ajusta cada um, salva como estado da conversa, e
@@ -42,7 +44,7 @@ def executar_atualizar_pedido(conversa_id, entrada):
         return {"erro": "Não foi possível atualizar o pedido agora. Continue a conversa normalmente e tente de novo em seguida."}
 
 
-def executar_consultar_pedido_minimo(entrada):
+def executar_consultar_pedido_minimo(entrada: Dict[str, Any]) -> Dict[str, Any]:
     """Executa a ferramenta 'consultar_pedido_minimo': ajusta tamanho/espessura para valores
     tecnicamente válidos e calcula o pedido mínimo real dessa combinação."""
     try:
@@ -69,7 +71,7 @@ def executar_consultar_pedido_minimo(entrada):
         return {"erro": "Não foi possível calcular o mínimo para esses dados. Peça para o cliente confirmar produto, tamanho e espessura novamente."}
 
 
-def executar_calcular_orcamento(entrada):
+def executar_calcular_orcamento(entrada: Dict[str, Any]) -> Dict[str, Any]:
     """Executa a ferramenta 'calcular_orcamento': é a ÚNICA forma pela qual um preço final
     chega até o cliente. A IA nunca calcula preço sozinha - só usa o que esta função devolve."""
     try:
