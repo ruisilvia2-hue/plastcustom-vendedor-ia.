@@ -29,6 +29,18 @@ def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict
         resultados = [processar_item_pedido(it) for it in itens_entrada]
         estado = {"itens": [r["item"] for r in resultados], "observacoes": entrada.get("observacoes", "")}
         salvar_estado_pedido(conversa_id, estado)
+
+        itens_completos = sum(1 for r in resultados if r["completo"])
+        logger.info(
+            "Pedido atualizado",
+            extra={
+                "evento": "pedido_atualizado",
+                "conversa_id": conversa_id,
+                "itens": len(resultados),
+                "completos": itens_completos,
+            },
+        )
+
         return {
             "itens": [
                 {**r["item"], "ajustes_feitos": r["ajustes"], "faltando": r["faltando"],
@@ -37,10 +49,13 @@ def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict
             ],
             "observacoes": estado["observacoes"],
             "total_itens": len(resultados),
-            "itens_completos": sum(1 for r in resultados if r["completo"]),
+            "itens_completos": itens_completos,
         }
     except Exception as e:
-        logger.error(f"Erro na ferramenta atualizar_pedido: {e}")
+        logger.error(
+            "Falha ao atualizar pedido",
+            extra={"evento": "erro_atualizar_pedido", "conversa_id": conversa_id, "erro": str(e)},
+        )
         return {"erro": "Não foi possível atualizar o pedido agora. Continue a conversa normalmente e tente de novo em seguida."}
 
 
