@@ -11,6 +11,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 # ============================================================
 # LOGGING ESTRUTURADO (JSON) — uma linha de log = um objeto JSON completo.
 # Isso é o formato "JSON Lines" que ferramentas como Datadog, ELK/Elasticsearch e
@@ -62,6 +65,18 @@ logger = logging.getLogger("vendedor_ia")
 logger.setLevel(logging.INFO)
 logger.handlers = [_handler]
 logger.propagate = False  # evita duplicar a linha de log via o logger raiz
+
+# ============================================================
+# RATE LIMITING (proteção contra abuso/DoS)
+# ============================================================
+# ATENÇÃO - mesma limitação que já vimos no recarregar_tabela_precos: por padrão,
+# isso guarda a contagem NA MEMÓRIA de cada processo do Gunicorn separadamente.
+# Com --workers 4, o limite de verdade fica ~4x mais permissivo do que o número
+# sugere (cada worker conta por conta própria). Pra um limite exato entre todos os
+# workers, seria preciso apontar storage_uri pro Redis que vocês já têm rodando
+# pro n8n (ex: storage_uri="redis://usuario:senha@host:porta"). Por enquanto,
+# a versão em memória já resolve o principal (parar abuso/DoS na prática).
+limiter = Limiter(key_func=get_remote_address, default_limits=["200 per hour"])
 
 # ============================================================
 # VARIÁVEIS DE AMBIENTE (credenciais e configuração de infraestrutura)
