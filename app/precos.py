@@ -116,6 +116,49 @@ else:
     logger.warning(f"Não encontrou/não conseguiu ler {CAMINHO_CALCULADORA} - usando tabela de preços padrão embutida no código")
 
 
+def recarregar_tabela_precos() -> Dict[str, Any]:
+    """Relê o arquivo Plastcustom_Orcamento.html do disco agora mesmo e atualiza TABELA
+    e PRECOS_PP em tempo real - sem precisar reiniciar o serviço. Usa 'global' de
+    propósito: como lookup_fator_kg/lookup_pp leem TABELA/PRECOS_PP pelo nome do módulo
+    a cada chamada (não guardam uma cópia local), essa troca já vale pra próxima
+    mensagem processada, em qualquer parte do sistema.
+    Se o arquivo novo não existir ou vier corrompido/vazio, NÃO mexe nos valores atuais
+    (o robô continua usando a última tabela válida que tinha, em vez de quebrar)."""
+    global TABELA, PRECOS_PP
+
+    nova_tabela, novos_precos_pp = carregar_tabela_precos_do_html(CAMINHO_CALCULADORA)
+    if not nova_tabela:
+        logger.warning(
+            "Falha ao recarregar tabela de preços - mantendo valores atuais",
+            extra={"evento": "precos_recarregar_falhou", "caminho": CAMINHO_CALCULADORA},
+        )
+        return {
+            "sucesso": False,
+            "erro": f"Não foi possível ler/validar {CAMINHO_CALCULADORA} (arquivo ausente ou formato inesperado)",
+            "linhas_tabela_atual": len(TABELA),
+        }
+
+    linhas_antes = len(TABELA)
+    TABELA = nova_tabela
+    PRECOS_PP = novos_precos_pp
+    logger.info(
+        "Tabela de preços recarregada em tempo real",
+        extra={
+            "evento": "precos_recarregados",
+            "linhas_antes": linhas_antes,
+            "linhas_depois": len(TABELA),
+            "linhas_pp_com_nf": len(PRECOS_PP["com_nf"]),
+            "linhas_pp_sem_nf": len(PRECOS_PP["sem_nf"]),
+        },
+    )
+    return {
+        "sucesso": True,
+        "linhas_tabela": len(TABELA),
+        "linhas_pp_com_nf": len(PRECOS_PP["com_nf"]),
+        "linhas_pp_sem_nf": len(PRECOS_PP["sem_nf"]),
+    }
+
+
 # ============================================================
 # TABELA DE CILINDROS DE IMPRESSÃO — determina quais larguras/alturas são
 # tecnicamente possíveis de imprimir para cada produto
