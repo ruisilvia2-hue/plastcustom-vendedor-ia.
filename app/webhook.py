@@ -17,6 +17,7 @@ from app.database import (
 )
 from app.whatsapp import notificar_proprietario
 from app.ia import gerar_resposta, SYSTEM_PROMPT
+from app.precos import recarregar_tabela_precos
 
 bp = Blueprint("webhook", __name__)
 
@@ -109,6 +110,24 @@ def manutencao_limpeza():
     except Exception as e:
         logger.error(f"Erro na limpeza de dados antigos: {e}")
         return jsonify({"erro": str(e)}), 500
+
+
+@bp.route("/admin/recarregar-precos", methods=["POST"])
+def admin_recarregar_precos():
+    """Relê o arquivo Plastcustom_Orcamento.html e atualiza os preços em uso,
+    sem precisar reiniciar o serviço. Protegido pelo mesmo segredo do /webhook."""
+    if request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
+        return jsonify({"erro": "não autorizado"}), 401
+    try:
+        resultado = recarregar_tabela_precos()
+        status = 200 if resultado["sucesso"] else 500
+        return jsonify(resultado), status
+    except Exception as e:
+        logger.error(
+            "Erro inesperado ao recarregar preços",
+            extra={"evento": "erro_recarregar_precos", "erro": str(e)},
+        )
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
 
 
 @bp.route("/health", methods=["GET"])
