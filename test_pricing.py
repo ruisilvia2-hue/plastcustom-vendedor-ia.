@@ -4,7 +4,7 @@ Testes automatizados da lógica de preço/tamanho/espessura do Vendedor IA.
 COMO RODAR:
     python3 -m unittest test_pricing.py -v
 
-Se algum teste falhar depois de uma mudança no app.py, é sinal de que algo no
+Se algum teste falhar depois de uma mudança no código, é sinal de que algo no
 cálculo de preço, tamanho ou espessura mudou de comportamento sem querer.
 Esses valores "esperados" foram conferidos manualmente contra a calculadora
 oficial da Plastcustom (Plastcustom_Orcamento.html) durante o desenvolvimento.
@@ -12,7 +12,7 @@ oficial da Plastcustom (Plastcustom_Orcamento.html) durante o desenvolvimento.
 import os
 import unittest
 
-# Variáveis de ambiente falsas só pra permitir importar o app.py sem precisar
+# Variáveis de ambiente falsas só pra permitir importar o pacote sem precisar
 # de credenciais reais nem de conexão de verdade com banco/IA/WhatsApp.
 os.environ.setdefault("CLAUDE_API_KEY", "test-key")
 os.environ.setdefault("DATABASE_URL", "postgres://test:test@localhost/test")
@@ -22,7 +22,10 @@ os.environ.setdefault("PROPRIETARIO_TELEFONE", "5500000000000")
 os.environ.setdefault("CONSULTOR_TELEFONE", "5500000000000")
 os.environ.setdefault("WEBHOOK_SECRET", "test-secret")
 
-import app
+# Os testes de cálculo importam direto do módulo de preços (não precisam do Flask
+# nem do banco de verdade) - mais rápido e mais isolado.
+from app import precos as app
+from app import tools as tools_app
 
 
 class TestCalculoPreco(unittest.TestCase):
@@ -106,7 +109,7 @@ class TestFerramentasDaIA(unittest.TestCase):
     """Testa as funções que a IA chama via tool use - o ponto de entrada real em produção."""
 
     def test_calcular_orcamento_caso_normal(self):
-        resultado = app.executar_calcular_orcamento({
+        resultado = tools_app.executar_calcular_orcamento({
             "produto": "Sacola Vazada", "material": "Virgem BD", "largura": 40, "altura": 50,
             "espessura": 0.008, "cores_n": 3, "impressao": "FRENTE", "milheiros": 30,
         })
@@ -115,7 +118,7 @@ class TestFerramentasDaIA(unittest.TestCase):
         self.assertGreater(resultado["preco_total"], 0)
 
     def test_calcular_orcamento_abaixo_do_minimo_retorna_erro_sem_preco(self):
-        resultado = app.executar_calcular_orcamento({
+        resultado = tools_app.executar_calcular_orcamento({
             "produto": "Sacola Vazada", "material": "Virgem BD", "largura": 40, "altura": 50,
             "espessura": 0.008, "cores_n": 3, "impressao": "FRENTE", "milheiros": 1,
         })
@@ -125,14 +128,14 @@ class TestFerramentasDaIA(unittest.TestCase):
     def test_calcular_orcamento_dado_malformado_nao_derruba_o_servidor(self):
         """Se a IA mandar um valor no formato errado, tem que devolver erro tratado,
         nunca deixar uma exceção crua estourar (que derrubaria a resposta ao cliente)."""
-        resultado = app.executar_calcular_orcamento({
+        resultado = tools_app.executar_calcular_orcamento({
             "produto": "Sacola Vazada", "largura": "não é um número", "altura": 50,
             "espessura": 0.008, "cores_n": 3, "impressao": "FRENTE", "milheiros": 30,
         })
         self.assertIn("erro", resultado)
 
     def test_consultar_pedido_minimo_caso_normal(self):
-        resultado = app.executar_consultar_pedido_minimo({
+        resultado = tools_app.executar_consultar_pedido_minimo({
             "produto": "Sacola Camiseta", "largura": 35, "altura": 55, "espessura": 0.008, "cores_n": 3,
         })
         self.assertNotIn("erro", resultado)
@@ -182,7 +185,7 @@ class TestMemoriaEstruturadaDoPedido(unittest.TestCase):
                  "espessura": 0.008, "cores_n": 0, "impressao": "FRENTE", "milheiros": 30},
             ]
         }
-        resultado = app.executar_atualizar_pedido(conversa_id="00000000-0000-0000-0000-000000000000", entrada=entrada)
+        resultado = tools_app.executar_atualizar_pedido(conversa_id="00000000-0000-0000-0000-000000000000", entrada=entrada)
         self.assertEqual(resultado["total_itens"], 3)
         # cada item tem preço calculado de forma independente
         precos = [it["preco_preview"]["preco_total"] for it in resultado["itens"]]
