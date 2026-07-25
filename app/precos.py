@@ -8,6 +8,7 @@ números e devolve números. Isso o deixa fácil de testar isoladamente (veja te
 """
 import re
 import math
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import (
     logger, CAMINHO_CALCULADORA,
@@ -58,7 +59,7 @@ PRECOS_PP_PADRAO = {
 }
 
 
-def carregar_tabela_precos_do_html(caminho):
+def carregar_tabela_precos_do_html(caminho: str) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, List[Dict[str, Any]]]]]:
     """Lê a tabela de fator/kg (TABELA) e a tabela de PP (PRECOS_PP) diretamente do arquivo
     HTML da calculadora oficial. Se o arquivo não existir ou não puder ser lido, devolve
     (None, None) e quem chamou usa a tabela padrão como rede de segurança."""
@@ -158,13 +159,13 @@ PRODUTO_REGRA_CILINDRO = {
 }
 
 
-def largura_camiseta_mais_proxima(largura):
+def largura_camiseta_mais_proxima(largura: float) -> float:
     return min(LARGURAS_SACOLA_CAMISETA_PERMITIDAS, key=lambda v: abs(v - largura))
 
 
-def disponibilidade_cilindro(medida_base, cores_n, max_rep, produto):
+def disponibilidade_cilindro(medida_base: float, cores_n: int, max_rep: int, produto: str) -> List[Dict[str, bool]]:
     """Para cada repetição possível (1x, 2x, 3x...) verifica se existe cilindro compatível."""
-    resultados = []
+    resultados: List[Dict[str, bool]] = []
     for rep in range(1, max_rep + 1):
         alvo = medida_base * rep
         itens = [c for c in TABELA_CILINDRO_IMPRESSORA if abs(c["cilindro"] - alvo) < 1e-6]
@@ -177,13 +178,14 @@ def disponibilidade_cilindro(medida_base, cores_n, max_rep, produto):
     return resultados
 
 
-def medida_cilindro_valida(produto, medida, cores_n, max_rep):
+def medida_cilindro_valida(produto: str, medida: float, cores_n: int, max_rep: int) -> bool:
     return any(r["disponivel"] and r["ok_cores"] for r in disponibilidade_cilindro(medida, cores_n, max_rep, produto))
 
 
-def medida_cilindro_mais_proxima(produto, medida, cores_n, max_rep):
+def medida_cilindro_mais_proxima(produto: str, medida: float, cores_n: int, max_rep: int) -> Optional[float]:
     """Busca, entre todos os cilindros compatíveis, a medida-base mais próxima do que o cliente pediu."""
-    melhor, melhor_dist = None, None
+    melhor: Optional[float] = None
+    melhor_dist: Optional[float] = None
     for c in TABELA_CILINDRO_IMPRESSORA:
         if cores_n > 0 and c["cores"] < cores_n:
             continue
@@ -197,11 +199,11 @@ def medida_cilindro_mais_proxima(produto, medida, cores_n, max_rep):
     return melhor
 
 
-def ajustar_tamanho(produto, largura, altura, cores_n):
+def ajustar_tamanho(produto: str, largura: float, altura: float, cores_n: int) -> Tuple[float, float, List[str]]:
     """Ajusta largura/altura para os valores tecnicamente possíveis (com cilindro de impressão
     disponível), igual a calculadora faz automaticamente. Retorna (largura, altura, lista_de_ajustes)."""
     largura = float(largura); altura = float(altura); cores_n = int(cores_n)
-    ajustes = []
+    ajustes: List[str] = []
 
     if produto == "Sacola Camiseta":
         nova_largura = largura_camiseta_mais_proxima(largura)
@@ -234,7 +236,7 @@ ESPESSURAS_POR_PRODUTO = {
 }
 
 
-def espessura_mais_proxima(valor, produto=None):
+def espessura_mais_proxima(valor: Any, produto: Optional[str] = None) -> float:
     """Ajusta qualquer valor informado para a opção oficial mais próxima DENTRO do produto escolhido."""
     opcoes = ESPESSURAS_POR_PRODUTO.get(produto) or sorted({e for lst in ESPESSURAS_POR_PRODUTO.values() for e in lst})
     try:
@@ -244,7 +246,7 @@ def espessura_mais_proxima(valor, produto=None):
     return min(opcoes, key=lambda x: abs(x - v))
 
 
-def lookup_pp(imp, cores_faixa, kg, tipo_nota):
+def lookup_pp(imp: str, cores_faixa: str, kg: float, tipo_nota: str) -> float:
     tabela = PRECOS_PP.get(tipo_nota, PRECOS_PP["com_nf"])
     faixa = next((f for f in tabela if kg <= f["ate"]), tabela[-1])
     frente_verso = "VERSO" in imp
@@ -254,7 +256,7 @@ def lookup_pp(imp, cores_faixa, kg, tipo_nota):
     return faixa["frente2"] if ate2 else faixa["frente3"]
 
 
-def lookup_fator_kg(material, imp, cores_faixa, kg, tipo_nota="com_nf"):
+def lookup_fator_kg(material: str, imp: str, cores_faixa: str, kg: float, tipo_nota: str = "com_nf") -> float:
     if material == "Polipropileno (PP)":
         return lookup_pp(imp, cores_faixa, kg, tipo_nota)
     row = next((r for r in TABELA if r["m"] == material and r["i"] == imp and r["c"] == cores_faixa), None)
@@ -264,7 +266,7 @@ def lookup_fator_kg(material, imp, cores_faixa, kg, tipo_nota="com_nf"):
     return round(fator_base * 0.91, 2) if tipo_nota == "sem_nf" else fator_base
 
 
-def calcular_pedido_minimo(largura, altura, espessura, cores_n):
+def calcular_pedido_minimo(largura: float, altura: float, espessura: float, cores_n: int) -> Optional[Dict[str, float]]:
     """Pedido mínimo real: 150kg com impressão / 100kg sem impressão, convertido em milheiros
     de acordo com o peso de CADA combinação de tamanho+espessura (não é um número fixo)."""
     L = float(largura); A = float(altura); E = float(espessura)
@@ -280,7 +282,17 @@ def calcular_pedido_minimo(largura, altura, espessura, cores_n):
     }
 
 
-def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, espessura=0.028, tipo_nota="com_nf"):
+def calcular_preco(
+    produto: str,
+    material: str,
+    largura: float,
+    altura: float,
+    cores_n: int,
+    imp: str,
+    milheiros: float,
+    espessura: float = 0.028,
+    tipo_nota: str = "com_nf",
+) -> Dict[str, Any]:
     """Calcula o preço EXATO seguindo a mesma lógica da calculadora oficial da Plastcustom.
     Não inclui clichê (cobrado à parte, conforme já informado pelo robô ao cliente)."""
     L = float(largura)
@@ -334,11 +346,11 @@ def calcular_preco(produto, material, largura, altura, cores_n, imp, milheiros, 
 CAMPOS_OBRIGATORIOS_ITEM = ["produto", "largura", "altura", "espessura", "cores_n", "impressao", "milheiros"]
 
 
-def processar_item_pedido(item):
+def processar_item_pedido(item: Dict[str, Any]) -> Dict[str, Any]:
     """Valida e ajusta UM item do pedido (tamanho/espessura), calcula o que falta, e
     gera uma prévia de preço se já estiver completo. Função pura (sem banco de dados),
     o que a deixa fácil de testar isoladamente."""
-    ajustes = []
+    ajustes: List[str] = []
     produto = item.get("produto")
     material = item.get("material")
     if material is not None and material not in MATERIAIS_VALIDOS:
