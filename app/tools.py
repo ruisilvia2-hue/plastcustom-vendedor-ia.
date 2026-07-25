@@ -86,53 +86,123 @@ def executar_consultar_pedido_minimo(entrada: Dict[str, Any]) -> Dict[str, Any]:
         return {"erro": "Não foi possível calcular o mínimo para esses dados. Peça para o cliente confirmar produto, tamanho e espessura novamente."}
 
 
+CAMPOS_OBRIGATORIOS_ORCAMENTO = ["produto", "largura", "altura", "espessura", "cores_n", "milheiros"]
+
+
 def executar_calcular_orcamento(entrada: Dict[str, Any]) -> Dict[str, Any]:
     """Executa a ferramenta 'calcular_orcamento': é a ÚNICA forma pela qual um preço final
-    chega até o cliente. A IA nunca calcula preço sozinha - só usa o que esta função devolve."""
+    chega até o cliente. A IA nunca calcula preço sozinha - só usa o que esta função devolve.
+
+    Formato de erro estruturado (em vez de só uma frase solta):
+      erro="dados_incompletos"  -> faltou informar algum campo obrigatório (ver campos_faltando)
+      erro="valor_invalido"     -> algum valor veio num formato/opção que não faz sentido
+      erro="fora_da_faixa"      -> os dados são válidos, mas o peso fica abaixo do mínimo (ver sugestoes)
+    Em todo erro, "mensagem" já vem pronta em português, pra IA usar (ou se inspirar) na resposta ao cliente.
+    """
+    campos_faltando = [c for c in CAMPOS_OBRIGATORIOS_ORCAMENTO if entrada.get(c) is None]
+    if campos_faltando:
+        logger.warning(
+            "calcular_orcamento chamado com dados incompletos",
+            extra={"evento": "orcamento_dados_incompletos", "campos_faltando": campos_faltando},
+        )
+        return {
+            "erro": "dados_incompletos",
+            "mensagem": "Ainda preciso de mais alguns dados antes de calcular o preço: " + ", ".join(campos_faltando) + ".",
+            "campos_faltando": campos_faltando,
+        }
+
+    produto = entrada.get("produto")
+    if produto not in PRODUTOS_VALIDOS:
+        return {
+            "erro": "valor_invalido",
+            "mensagem": f"'{produto}' não é um produto reconhecido. Confirme com o cliente qual produto ele quer, entre as opções válidas.",
+            "campos_faltando": ["produto"],
+        }
+
     try:
-        produto = entrada.get("produto")
-        material = entrada.get("material") or "Virgem BD"
-        if material not in MATERIAIS_VALIDOS:
-            material = "Virgem BD"
-        cor_produto = entrada.get("cor_produto") or "Transparente"
-        if cor_produto not in CORES_PRODUTO_VALIDAS:
-            cor_produto = "Transparente"
         largura = float(entrada["largura"])
         altura = float(entrada["altura"])
         espessura_pedida = float(entrada["espessura"])
         cores_n = int(entrada["cores_n"])
-        impressao = entrada.get("impressao") or "FRENTE"
-        imp_map = "IMPRESSÃO FRENTE / VERSO" if impressao == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
         milheiros = float(entrada["milheiros"])
-
-        largura, altura, ajustes = ajustar_tamanho(produto, largura, altura, cores_n)
-        espessura = espessura_mais_proxima(espessura_pedida, produto)
-        if abs(espessura - espessura_pedida) > 1e-6:
-            ajustes.append(f"espessura ajustada de {espessura_pedida:g}mm para {espessura:g}mm (opção disponível para este produto)")
-
-        calc = calcular_preco(produto, material, largura, altura, cores_n, imp_map, milheiros, espessura=espessura)
-
-        if not calc["atende_minimo"]:
-            return {
-                "erro": "peso abaixo do mínimo exigido para esta combinação",
-                "pedido_minimo_milheiros": calc["pedido_minimo_milheiros"],
-                "peso_calculado_kg": calc["peso_total_kg"],
-                "peso_minimo_kg": calc["pedido_minimo_kg"],
-                "instrucao": "Explique ao cliente que não é possível fechar nesse peso e peça para aumentar a quantidade para o mínimo informado.",
-            }
-
+    except (TypeError, ValueError) as e:
+        logger.warning(
+            "calcular_orcamento recebeu valor não numérico",
+            extra={"evento": "orcamento_valor_invalido", "detalhe": str(e)},
+        )
         return {
-            "produto": produto, "material": material, "cor_produto": cor_produto,
-            "largura_usada": largura, "altura_usada": altura, "espessura_usada": espessura,
-            "cores_n": cores_n, "impressao": impressao, "milheiros": milheiros,
-            "ajustes_feitos": ajustes,
-            "preco_por_milheiro": calc["milheiro"],
-            "preco_total": calc["total"],
-            "peso_total_kg": calc["peso_total_kg"],
+            "erro": "valor_invalido",
+            "mensagem": "Algum dos números do pedido (tamanho, espessura, cores ou quantidade) não ficou claro. Confirme esses valores com o cliente.",
+        }
+
+    material = entrada.get("material") or "Virgem BD"
+    if material not in MATERIAIS_VALIDOS:
+        material = "Virgem BD"
+    cor_produto = entrada.get("cor_produto") or "Transparente"
+    if cor_produto not in CORES_PRODUTO_VALIDAS:
+        cor_produto = "Transparente"
+    impressao = entrada.get("impressao") or "FRENTE"
+    imp_map = "IMPRESSÃO FRENTE / VERSO" if impressao == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
+
+    largura, altura, ajustes = ajustar_tamanho(produto, largura, altura, cores_n)
+    espessura = espessura_mais_proxima(espessura_pedida, produto)
+    if abs(espessura - espessura_pedida) > 1e-6:
+        ajustes.append(f"espessura ajustada de {espessura_pedida:g}mm para {espessura:g}mm (opção disponível para este produto)")
+
+    try:
+        calc = calcular_preco(produto, material, largura, altura, cores_n, imp_map, milheiros, espessura=espessura)
+    except ValueError as e:
+        # calcular_preco levanta ValueError quando a combinação material/impressão/cores
+        # simplesmente não existe na tabela de preços.
+        logger.warning(
+            "Combinação sem preço na tabela",
+            extra={"evento": "orcamento_combinacao_invalida", "detalhe": str(e)},
+        )
+        return {
+            "erro": "valor_invalido",
+            "mensagem": "Não encontrei preço para essa combinação de material, impressão e cores. Confirme os dados com o cliente.",
         }
     except Exception as e:
-        logger.error(f"Erro na ferramenta calcular_orcamento: {e}")
-        return {"erro": "Não foi possível calcular o preço para esta combinação agora. Diga ao cliente que vai confirmar com a equipe e retornar em breve. NÃO informe nenhum valor."}
+        logger.error(
+            "Erro inesperado ao calcular preço",
+            extra={"evento": "orcamento_erro_inesperado", "erro": str(e)},
+        )
+        return {
+            "erro": "valor_invalido",
+            "mensagem": "Não foi possível calcular o preço agora. Diga ao cliente que vai confirmar com a equipe e retornar em breve. NÃO informe nenhum valor.",
+        }
+
+    if not calc["atende_minimo"]:
+        minimo_milheiros = calc["pedido_minimo_milheiros"]
+        logger.info(
+            "Pedido abaixo do peso mínimo",
+            extra={
+                "evento": "orcamento_fora_da_faixa",
+                "peso_kg": calc["peso_total_kg"],
+                "minimo_kg": calc["pedido_minimo_kg"],
+            },
+        )
+        return {
+            "erro": "fora_da_faixa",
+            "mensagem": (
+                f"Essa quantidade fica abaixo do peso mínimo de produção ({calc['pedido_minimo_kg']}kg). "
+                f"Para fechar, seria preciso pelo menos {minimo_milheiros:.1f} mil unidades."
+            ),
+            "sugestoes": [f"aumentar a quantidade para {minimo_milheiros:.1f} mil unidades"],
+            "pedido_minimo_milheiros": minimo_milheiros,
+            "peso_calculado_kg": calc["peso_total_kg"],
+            "peso_minimo_kg": calc["pedido_minimo_kg"],
+        }
+
+    return {
+        "produto": produto, "material": material, "cor_produto": cor_produto,
+        "largura_usada": largura, "altura_usada": altura, "espessura_usada": espessura,
+        "cores_n": cores_n, "impressao": impressao, "milheiros": milheiros,
+        "ajustes_feitos": ajustes,
+        "preco_por_milheiro": calc["milheiro"],
+        "preco_total": calc["total"],
+        "peso_total_kg": calc["peso_total_kg"],
+    }
 
 
 TOOLS = [
