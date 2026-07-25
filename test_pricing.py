@@ -209,5 +209,41 @@ class TestMemoriaEstruturadaDoPedido(unittest.TestCase):
                 self.assertIsNone(r["preco_preview"])
 
 
+class TestRecarregarPrecosEmTempoReal(unittest.TestCase):
+    """Testa a função por trás do endpoint /admin/recarregar-precos: precisa
+    conseguir recarregar sem reiniciar o serviço, e nunca deixar o sistema
+    numa situação pior do que estava se o arquivo novo vier ruim."""
+
+    def test_recarga_com_arquivo_valido_funciona(self):
+        resultado = app.recarregar_tabela_precos()
+        self.assertTrue(resultado["sucesso"])
+        self.assertGreaterEqual(resultado["linhas_tabela"], 10)
+
+    def test_recarga_com_arquivo_invalido_preserva_tabela_atual(self):
+        caminho_original = app.CAMINHO_CALCULADORA
+        tabela_antes = app.TABELA
+        try:
+            app.CAMINHO_CALCULADORA = "/caminho/que/nao/existe.html"
+            resultado = app.recarregar_tabela_precos()
+            self.assertFalse(resultado["sucesso"])
+            self.assertEqual(app.TABELA, tabela_antes)  # nada mudou, sistema continua saudável
+        finally:
+            app.CAMINHO_CALCULADORA = caminho_original
+
+    def test_mudanca_na_tabela_e_vista_pelo_modulo_de_ferramentas(self):
+        """Prova que a recarga não fica 'presa' no módulo precos - o resto do
+        sistema (tools.py) precisa ver o valor novo na próxima chamada."""
+        tabela_original = app.TABELA
+        try:
+            app.TABELA = [{"m": "Virgem BD", "i": "IMPRESSÃO FRENTE", "c": "até 2 cores", "v1": 999.0, "v2": 999.0, "v3": 999.0}]
+            resultado = tools_app.executar_calcular_orcamento({
+                "produto": "Sacola Vazada", "material": "Virgem BD", "largura": 40, "altura": 50,
+                "espessura": 0.008, "cores_n": 1, "impressao": "FRENTE", "milheiros": 30,
+            })
+            self.assertGreater(resultado.get("preco_por_milheiro", 0), 1000)  # reflete o 999 forçado
+        finally:
+            app.TABELA = tabela_original
+
+
 if __name__ == "__main__":
     unittest.main()
