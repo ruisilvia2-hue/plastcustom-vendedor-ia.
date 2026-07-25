@@ -1,21 +1,67 @@
 """
 Configuração central: variáveis de ambiente, constantes de negócio (materiais, cores,
-produtos válidos) e o logger compartilhado por todos os outros módulos.
+produtos válidos) e o logger estruturado (JSON) compartilhado por todos os outros módulos.
 
 Nenhum outro módulo deve ler os.environ diretamente - tudo passa por aqui, então dá
 pra saber, num único lugar, tudo que o projeto precisa ter configurado pra rodar.
 """
 import os
+import json
 import logging
+from datetime import datetime, timezone
+from typing import Any
 
 # ============================================================
-# LOGGING
+# LOGGING ESTRUTURADO (JSON) — uma linha de log = um objeto JSON completo.
+# Isso é o formato "JSON Lines" que ferramentas como Datadog, ELK/Elasticsearch e
+# CloudWatch Logs esperam nativamente: cada linha é filtrável/pesquisável por campo,
+# sem precisar de parser customizado pra extrair informação de texto solto.
 # ============================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+
+
+class JSONFormatter(logging.Formatter):
+    """Transforma cada registro de log num JSON de uma linha só.
+
+    Uso normal (igual antes, continua funcionando):
+        logger.info("Mensagem qualquer")
+        -> {"timestamp": "...", "level": "INFO", "mensagem": "Mensagem qualquer"}
+
+    Uso com campos estruturados extras (o que dá o real poder de filtrar depois):
+        logger.info("Pedido atualizado", extra={"evento": "pedido_atualizado", "conversa_id": 123})
+        -> {"timestamp": "...", "level": "INFO", "mensagem": "Pedido atualizado",
+            "evento": "pedido_atualizado", "conversa_id": 123}
+    """
+
+    # Nomes de atributos que todo LogRecord já tem por padrão - usado pra saber quais
+    # chaves em record.__dict__ são "extras" de verdade (passadas via extra=...) e
+    # quais são só o funcionamento interno do próprio módulo logging.
+    _CAMPOS_PADRAO = set(vars(logging.makeLogRecord({})).keys())
+
+    def format(self, record: logging.LogRecord) -> str:
+        entrada: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "mensagem": record.getMessage(),
+        }
+        # Adiciona qualquer campo extra passado via logger.info(..., extra={...})
+        for chave, valor in record.__dict__.items():
+            if chave not in self._CAMPOS_PADRAO and chave not in entrada:
+                entrada[chave] = valor
+        if record.exc_info:
+            entrada["exception"] = self.formatException(record.exc_info)
+        # default=str: se algum campo extra vier com um tipo que o JSON não entende
+        # (ex: um UUID), converte pra texto em vez de quebrar o log inteiro.
+        return json.dumps(entrada, ensure_ascii=False, default=str)
+
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(JSONFormatter())
+
 logger = logging.getLogger("vendedor_ia")
+logger.setLevel(logging.INFO)
+logger.handlers = [_handler]
+logger.propagate = False  # evita duplicar a linha de log via o logger raiz
 
 # ============================================================
 # VARIÁVEIS DE AMBIENTE (credenciais e configuração de infraestrutura)
