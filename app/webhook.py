@@ -9,7 +9,7 @@ import json
 
 from flask import Blueprint, request, jsonify
 
-from app.config import logger, WEBHOOK_SECRET
+from app.config import logger, WEBHOOK_SECRET, limiter
 from app.database import (
     buscar_ou_criar_cliente, buscar_ou_criar_conversa, verificar_mensagem_duplicada,
     salvar_mensagem, obter_historico, obter_estado_pedido, calcular_score,
@@ -23,6 +23,7 @@ bp = Blueprint("webhook", __name__)
 
 
 @bp.route("/webhook", methods=["POST"])
+@limiter.limit("30 per minute")  # bem acima do que um uso normal precisa, mas trava abuso/DoS
 def webhook():
     # Autenticação: só aceita chamadas que tragam o segredo combinado com o n8n.
     # Sem isso, qualquer pessoa na internet que descobrisse esse endereço poderia
@@ -30,8 +31,11 @@ def webhook():
     if request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
         return jsonify({"erro": "não autorizado"}), 401
 
-    data = request.get_json()
-    telefone_raw = data.get("telefone", "").strip()
+    # silent=True: se o corpo vier malformado (não é JSON válido), devolve None em vez
+    # de levantar uma exceção não tratada - "or {}" garante que sempre temos um dict
+    # pra chamar .get() com segurança, mesmo com um corpo de requisição hostil/quebrado.
+    data = request.get_json(silent=True) or {}
+    telefone_raw = data.get("telefone", "").strip()[:30]  # telefone real nunca passa de ~15 dígitos
     mensagem = data.get("mensagem", "").strip()[:2000]  # limite defensivo contra payloads abusivos
     if not telefone_raw or not mensagem:
         return jsonify({"erro": "dados incompletos"}), 400
@@ -42,7 +46,7 @@ def webhook():
 
         # Proteção contra reprocessar a mesma mensagem duas vezes (webhook duplicado).
         # Só entra em ação se o n8n estiver mandando o "mensagem_id" (opcional).
-        mensagem_id = data.get("mensagem_id")
+        mensagem_id = (data.get("mensagem_id") or "")[:100] or None
         resposta_duplicada = verificar_mensagem_duplicada(mensagem_id, conversa["id"])
         if resposta_duplicada is not None:
             logger.warning(f"Mensagem duplicada detectada (id={mensagem_id}) - devolvendo resposta anterior sem reprocessar")
@@ -95,6 +99,7 @@ def webhook():
 
 
 @bp.route("/manutencao/limpeza", methods=["POST"])
+@limiter.limit("10 per hour")  # endpoint administrativo, uso esperado é raro
 def manutencao_limpeza():
     """Endpoint protegido para a limpeza periódica de dados antigos (LGPD).
     Por padrão roda em modo de TESTE (não apaga nada) - só passa a apagar de
@@ -108,11 +113,18 @@ def manutencao_limpeza():
         resultado = limpar_dados_antigos(meses=meses, modo_teste=modo_teste)
         return jsonify(resultado)
     except Exception as e:
-        logger.error(f"Erro na limpeza de dados antigos: {e}")
-        return jsonify({"erro": str(e)}), 500
+        # NÃO devolve str(e) pra fora - detalhe técnico interno (nome de tabela,
+        # estrutura do banco) não deveria vazar nem pra quem tem o segredo certo.
+        # O erro de verdade fica só no log, pra você/eu debugarmos.
+        logger.error(
+            "Erro na limpeza de dados antigos",
+            extra={"evento": "erro_limpeza_dados", "erro": str(e)},
+        )
+        return jsonify({"erro": "Não foi possível concluir a limpeza agora. Verifique os logs do serviço."}), 500
 
 
 @bp.route("/admin/recarregar-precos", methods=["POST"])
+@limiter.limit("10 per hour")  # endpoint administrativo, uso esperado é raro
 def admin_recarregar_precos():
     """Relê o arquivo Plastcustom_Orcamento.html e atualiza os preços em uso,
     sem precisar reiniciar o serviço. Protegido pelo mesmo segredo do /webhook."""
@@ -127,7 +139,8 @@ def admin_recarregar_precos():
             "Erro inesperado ao recarregar preços",
             extra={"evento": "erro_recarregar_precos", "erro": str(e)},
         )
-        return jsonify({"sucesso": False, "erro": str(e)}), 500
+        # Idem: não devolve str(e) pra fora, só um erro genérico + log detalhado internamente.
+        return jsonify({"sucesso": False, "erro": "Não foi possível recarregar os preços agora. Verifique os logs do serviço."}), 500
 
 
 @bp.route("/health", methods=["GET"])
