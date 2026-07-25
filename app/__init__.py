@@ -7,9 +7,12 @@ igual a antes, mesmo com o código agora dividido em vários arquivos.
 """
 from flask import Flask
 
+from app.config import limiter
+
 
 def create_app():
     flask_app = Flask(__name__)
+    limiter.init_app(flask_app)
 
     # Importa o Blueprint aqui dentro (não lá no topo do arquivo) para evitar
     # "importação circular": webhook.py importa de outros módulos do pacote, que
