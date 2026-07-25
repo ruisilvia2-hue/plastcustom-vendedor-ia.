@@ -3,6 +3,7 @@ Tudo que fala com o banco de dados: o pool de conexões, e as funções que
 buscam/criam/atualizam clientes, conversas, mensagens, estado do pedido e leads.
 """
 import re
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 from psycopg2 import pool as pg_pool
@@ -10,10 +11,10 @@ from psycopg2.extras import RealDictCursor, Json
 
 from app.config import logger, DATABASE_URL, SINAIS
 
-_db_pool = None
+_db_pool: Optional[pg_pool.ThreadedConnectionPool] = None
 
 
-def get_pool():
+def get_pool() -> pg_pool.ThreadedConnectionPool:
     """Cria o pool de conexões só na primeira vez que for realmente necessário
     (não ao importar o arquivo). Isso também é mais seguro com o Gunicorn:
     cada processo worker cria o seu próprio pool depois de nascer."""
@@ -23,19 +24,19 @@ def get_pool():
     return _db_pool
 
 
-def get_db():
+def get_db() -> Any:  # objeto de conexão do psycopg2 (não tem um tipo público exportado)
     return get_pool().getconn()
 
 
-def release_db(db):
+def release_db(db: Any) -> None:
     get_pool().putconn(db)
 
 
-def limpar_telefone(telefone):
+def limpar_telefone(telefone: str) -> str:
     return re.sub(r'[^0-9]', '', telefone)[:20]
 
 
-def buscar_ou_criar_cliente(telefone):
+def buscar_ou_criar_cliente(telefone: str) -> Dict[str, Any]:
     telefone = limpar_telefone(telefone)
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
@@ -66,7 +67,7 @@ def buscar_ou_criar_cliente(telefone):
     return dict(c)
 
 
-def buscar_ou_criar_conversa(cliente_id):
+def buscar_ou_criar_conversa(cliente_id: str) -> Dict[str, Any]:
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM conversas WHERE cliente_id=%s AND status='ativa' ORDER BY inicio DESC LIMIT 1", (cliente_id,))
@@ -79,7 +80,7 @@ def buscar_ou_criar_conversa(cliente_id):
     return dict(c)
 
 
-def obter_estado_pedido(conversa_id):
+def obter_estado_pedido(conversa_id: str) -> Dict[str, Any]:
     """Lê a memória estruturada do pedido (produto/tamanho/material/etc, podendo ter
     vários itens) salva no banco. Se a coluna ainda não existir, volta um estado vazio
     em vez de quebrar - o robô continua funcionando, só sem a memória persistente."""
@@ -97,7 +98,7 @@ def obter_estado_pedido(conversa_id):
         cur.close(); release_db(db)
 
 
-def salvar_estado_pedido(conversa_id, estado):
+def salvar_estado_pedido(conversa_id: str, estado: Dict[str, Any]) -> None:
     db = get_db()
     cur = db.cursor()
     try:
@@ -110,7 +111,7 @@ def salvar_estado_pedido(conversa_id, estado):
         cur.close(); release_db(db)
 
 
-def marcar_conversa_fechada(conversa_id):
+def marcar_conversa_fechada(conversa_id: str) -> None:
     """Depois que um pedido fecha, a conversa não fica mais 'ativa' - assim, se o mesmo
     cliente mandar mensagem de novo no futuro (um pedido novo), ele começa com uma
     memória de pedido limpa, em vez de arrastar o pedido antigo já fechado."""
@@ -126,7 +127,7 @@ def marcar_conversa_fechada(conversa_id):
         cur.close(); release_db(db)
 
 
-def verificar_mensagem_duplicada(mensagem_id, conversa_id):
+def verificar_mensagem_duplicada(mensagem_id: Optional[str], conversa_id: str) -> Optional[str]:
     """Protege contra reprocessar a MESMA mensagem duas vezes (webhook duplicado - o
     provedor de WhatsApp reenvia o aviso por segurança se a primeira resposta demorou).
     Se mensagem_id não vier preenchido, não faz nada (funciona como antes)."""
@@ -153,7 +154,7 @@ def verificar_mensagem_duplicada(mensagem_id, conversa_id):
         cur.close(); release_db(db)
 
 
-def salvar_mensagem(conversa_id, remetente, conteudo):
+def salvar_mensagem(conversa_id: str, remetente: str, conteudo: str) -> None:
     db = get_db()
     cur = db.cursor()
     cur.execute("INSERT INTO mensagens (conversa_id, remetente, conteudo) VALUES (%s,%s,%s)", (conversa_id, remetente, conteudo))
@@ -161,7 +162,7 @@ def salvar_mensagem(conversa_id, remetente, conteudo):
     db.commit(); cur.close(); release_db(db)
 
 
-def obter_historico(conversa_id):
+def obter_historico(conversa_id: str) -> List[Dict[str, Any]]:
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT remetente, conteudo FROM mensagens WHERE conversa_id=%s ORDER BY timestamp DESC LIMIT 30", (conversa_id,))
@@ -170,7 +171,7 @@ def obter_historico(conversa_id):
     return msgs
 
 
-def calcular_score(conversa_id, cliente_id):
+def calcular_score(conversa_id: str, cliente_id: str) -> Dict[str, Any]:
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT conteudo FROM mensagens WHERE conversa_id=%s AND remetente='cliente'", (conversa_id,))
@@ -191,7 +192,7 @@ def calcular_score(conversa_id, cliente_id):
     return {"score": score, "categoria": categoria}
 
 
-def limpar_dados_antigos(meses=12, modo_teste=True):
+def limpar_dados_antigos(meses: int = 12, modo_teste: bool = True) -> Dict[str, Any]:
     """Remove (ou só relata, se modo_teste=True) dados de clientes cuja conversa está
     inativa há mais de `meses` meses E que NUNCA resultou em pedido fechado. Pedidos
     fechados são preservados (motivo de negócio: histórico de vendas)."""
