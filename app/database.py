@@ -165,12 +165,35 @@ def verificar_mensagem_duplicada(mensagem_id: Optional[str], conversa_id: str) -
         cur.close(); release_db(db)
 
 
-def salvar_mensagem(conversa_id: str, remetente: str, conteudo: str) -> None:
+def salvar_mensagem(conversa_id: str, remetente: str, conteudo: str) -> Any:
+    """Devolve o timestamp exato da mensagem salva - usado pela proteção contra
+    mensagens em sequência rápida (ver existe_mensagem_cliente_mais_nova)."""
     db = get_db()
-    cur = db.cursor()
-    cur.execute("INSERT INTO mensagens (conversa_id, remetente, conteudo) VALUES (%s,%s,%s)", (conversa_id, remetente, conteudo))
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "INSERT INTO mensagens (conversa_id, remetente, conteudo) VALUES (%s,%s,%s) RETURNING timestamp",
+        (conversa_id, remetente, conteudo)
+    )
+    timestamp = cur.fetchone()["timestamp"]
     cur.execute("UPDATE conversas SET ultima_mensagem=NOW() WHERE id=%s", (conversa_id,))
     db.commit(); cur.close(); release_db(db)
+    return timestamp
+
+
+def existe_mensagem_cliente_mais_nova(conversa_id: str, apos: Any) -> bool:
+    """Verifica se já chegou uma mensagem do CLIENTE mais nova que 'apos' nesta
+    conversa. Usado para a proteção contra mensagens em sequência rápida: se o
+    cliente mandou várias mensagens seguidas (comum no WhatsApp), só a mais
+    recente deve gerar resposta - as anteriores "cedem a vez" para ela."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "SELECT 1 FROM mensagens WHERE conversa_id=%s AND remetente='cliente' AND timestamp > %s LIMIT 1",
+        (conversa_id, apos)
+    )
+    existe = cur.fetchone() is not None
+    cur.close(); release_db(db)
+    return existe
 
 
 def obter_historico(conversa_id: str) -> List[Dict[str, Any]]:
