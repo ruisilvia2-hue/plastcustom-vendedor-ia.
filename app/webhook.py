@@ -6,6 +6,7 @@ Este módulo é propositalmente enxuto: ele só orquestra a chamada dos outros m
 (database, whatsapp, ia) - a lógica de negócio de verdade vive lá, não aqui.
 """
 import json
+import time
 
 from flask import Blueprint, request, jsonify
 
@@ -13,7 +14,7 @@ from app.config import logger, WEBHOOK_SECRET, limiter
 from app.database import (
     buscar_ou_criar_cliente, buscar_ou_criar_conversa, verificar_mensagem_duplicada,
     salvar_mensagem, obter_historico, obter_estado_pedido, calcular_score,
-    limpar_dados_antigos,
+    limpar_dados_antigos, existe_mensagem_cliente_mais_nova,
 )
 from app.whatsapp import notificar_proprietario
 from app.ia import gerar_resposta, SYSTEM_PROMPT
@@ -52,7 +53,21 @@ def webhook():
             logger.warning(f"Mensagem duplicada detectada (id={mensagem_id}) - devolvendo resposta anterior sem reprocessar")
             return jsonify({"ok": True, "resposta": resposta_duplicada, "duplicado": True})
 
-        salvar_mensagem(conversa["id"], "cliente", mensagem)
+        timestamp_minha_mensagem = salvar_mensagem(conversa["id"], "cliente", mensagem)
+
+        # Proteção contra mensagens em sequência rápida (comum no WhatsApp: o cliente
+        # manda 2-3 mensagens curtas seguidas, cada uma seria processada e respondida
+        # SEPARADAMENTE, gerando confirmações duplicadas/confusas). Espera um pouco e
+        # confere se já chegou algo mais novo - se sim, deixa a mensagem mais recente
+        # "vencer" e responder por todas juntas (ela vai ver esta mensagem no histórico).
+        time.sleep(3)
+        if existe_mensagem_cliente_mais_nova(conversa["id"], timestamp_minha_mensagem):
+            logger.info(
+                "Mensagem superada por outra mais recente - não respondendo separadamente",
+                extra={"evento": "mensagem_superada", "conversa_id": conversa["id"]},
+            )
+            return jsonify({"ok": True, "resposta": "", "superada": True})
+
         historico = obter_historico(conversa["id"])
 
         # Monta o histórico como mensagens de verdade (user/assistant), não como um texto único.
