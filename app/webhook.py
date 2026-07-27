@@ -80,18 +80,27 @@ def webhook():
 
         # Se não há nenhuma mensagem anterior nesta conversa, é o primeiro contato -
         # a IA deve incluir a nota curta de privacidade (LGPD) na resposta.
-        system_prompt_final = SYSTEM_PROMPT
+        # Isso e o estado do pedido vão num bloco SEPARADO do SYSTEM_PROMPT (que é fixo
+        # e cacheável) - assim a parte que nunca muda não perde o cache por causa da
+        # parte que muda a cada mensagem.
+        partes_contexto_extra = []
         if not historico[:-1]:
-            system_prompt_final += "\n\nCONTEXTO: esta é a PRIMEIRA mensagem desta conversa - inclua a nota curta de privacidade no final da sua resposta, como instruído acima."
+            partes_contexto_extra.append(
+                "CONTEXTO: esta é a PRIMEIRA mensagem desta conversa - inclua a nota curta de privacidade no final da sua resposta, como instruído acima."
+            )
 
         # Injeta a memória estruturada do pedido (persistida no banco) diretamente no
         # contexto - assim a IA tem uma fonte confiável do que já foi informado, em vez
         # de precisar reler e "adivinhar" a partir do texto cru da conversa toda vez.
         estado_atual = obter_estado_pedido(conversa["id"])
         if estado_atual.get("itens"):
-            system_prompt_final += "\n\nESTADO ATUAL DO PEDIDO (já confirmado nesta conversa - NÃO pergunte de novo o que já está aqui):\n" + json.dumps(estado_atual, ensure_ascii=False)
+            partes_contexto_extra.append(
+                "ESTADO ATUAL DO PEDIDO (já confirmado nesta conversa - NÃO pergunte de novo o que já está aqui):\n"
+                + json.dumps(estado_atual, ensure_ascii=False)
+            )
 
-        resposta = gerar_resposta(messages, system_prompt_final, cliente, conversa)
+        contexto_extra = "\n\n".join(partes_contexto_extra)
+        resposta = gerar_resposta(messages, contexto_extra, cliente, conversa)
 
         salvar_mensagem(conversa["id"], "ia", resposta)
         lead = calcular_score(conversa["id"], cliente["id"])
