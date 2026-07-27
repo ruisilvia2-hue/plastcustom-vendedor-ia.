@@ -200,18 +200,66 @@ REGRAS GERAIS:
 - Tom confiante, direto, natural - como um vendedor experiente, não um script"""
 
 
-def gerar_resposta(messages, system_prompt_final, cliente, conversa):
+def _marcar_cache_na_ultima_mensagem(messages):
+    """Adiciona cache_control no ÚLTIMO bloco da última mensagem da lista. Isso marca
+    'tudo até aqui pode ser reaproveitado' - tanto pra próxima chamada dentro do MESMO
+    loop de ferramentas (que já reenvia o histórico + resultado da ferramenta anterior)
+    quanto, futuramente, pra próxima mensagem do cliente nesta mesma conversa.
+
+    IMPORTANTE: a API da Claude aceita no máximo 4 pontos de cache por chamada (já usamos
+    1 no SYSTEM_PROMPT e 1 nas TOOLS, sobrando só 2). Por isso, antes de marcar o novo
+    ponto, removemos qualquer marca de cache deixada em mensagens anteriores desta mesma
+    lista - senão, a cada volta do loop de ferramentas, acumularíamos mais um ponto e
+    estouraríamos o limite numa conversa com várias ferramentas encadeadas."""
+    if not messages:
+        return
+    for m in messages[:-1]:
+        conteudo = m.get("content")
+        if isinstance(conteudo, list):
+            for bloco in conteudo:
+                if isinstance(bloco, dict) and "cache_control" in bloco:
+                    del bloco["cache_control"]
+
+    ultima = messages[-1]
+    conteudo = ultima["content"]
+    if isinstance(conteudo, str):
+        ultima["content"] = [{"type": "text", "text": conteudo, "cache_control": {"type": "ephemeral"}}]
+    elif isinstance(conteudo, list) and conteudo:
+        ultimo_bloco = conteudo[-1]
+        if isinstance(ultimo_bloco, dict):
+            ultimo_bloco["cache_control"] = {"type": "ephemeral"}
+
+
+def gerar_resposta(messages, contexto_extra, cliente, conversa):
     """Roda o loop de ferramentas com a Claude até obter uma resposta final em texto.
     Antes eram sempre 2 chamadas de IA por mensagem (uma pra extrair dados, outra pra
     responder). Agora é 1 chamada normalmente, e só usa uma 2ª quando a IA realmente
-    precisa de alguma ferramenta - podendo encadear várias no meio do caminho."""
+    precisa de alguma ferramenta - podendo encadear várias no meio do caminho.
+
+    'contexto_extra' é o texto que MUDA a cada mensagem (nota de primeira conversa,
+    estado atual do pedido). É mandado como um bloco SEPARADO do SYSTEM_PROMPT fixo,
+    de propósito: assim o SYSTEM_PROMPT (que nunca muda) pode ser cacheado pela API da
+    Claude (cache_control) - a parte fixa não precisa ser paga de novo em toda chamada,
+    só a parte que realmente mudou. Isso reduz bastante o custo em créditos."""
+    system_blocks = [
+        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+    ]
+    if contexto_extra:
+        system_blocks.append({"type": "text", "text": contexto_extra})
+
     resposta_final = None
     for _ in range(6):  # limite de segurança contra loop infinito de ferramentas
+        # Marca "cacheável até aqui" antes de CADA chamada - importante porque uma
+        # mensagem do cliente pode gerar 2, 3, 4 chamadas seguidas (uma por ferramenta
+        # usada), e cada uma reenvia o histórico inteiro + tudo que já rodou antes
+        # nesse mesmo loop. Sem isso, cada chamada dentro do mesmo loop pagava o preço
+        # cheio de novo pelo que a chamada anterior, a alguns segundos atrás, já tinha mandado.
+        _marcar_cache_na_ultima_mensagem(messages)
         try:
             response = client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=800,
-                system=system_prompt_final,
+                system=system_blocks,
                 tools=TOOLS,
                 messages=messages,
             )
