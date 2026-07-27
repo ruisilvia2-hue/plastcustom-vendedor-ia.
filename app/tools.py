@@ -308,5 +308,8 @@ TOOLS = [
             },
             "required": ["tipo", "detalhe"],
         },
+        # Marca até aqui como cacheável: a lista de ferramentas é sempre a mesma,
+        # então não faz sentido pagar o preço cheio dela em toda chamada.
+        "cache_control": {"type": "ephemeral"},
     },
 ]
