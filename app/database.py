@@ -6,6 +6,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 import psycopg2
+import psycopg2.errors
 from psycopg2 import pool as pg_pool
 from psycopg2.extras import RealDictCursor, Json
 
@@ -157,7 +158,14 @@ def marcar_conversa_fechada(conversa_id: str) -> None:
 def verificar_mensagem_duplicada(mensagem_id: Optional[str], conversa_id: str) -> Optional[str]:
     """Protege contra reprocessar a MESMA mensagem duas vezes (webhook duplicado - o
     provedor de WhatsApp reenvia o aviso por segurança se a primeira resposta demorou).
-    Se mensagem_id não vier preenchido, não faz nada (funciona como antes)."""
+    Se mensagem_id não vier preenchido, não faz nada (funciona como antes).
+
+    IMPORTANTE: só trata como "duplicata de verdade" o erro específico de chave única
+    repetida (psycopg2.errors.UniqueViolation). Qualquer OUTRO erro (ex: a tabela
+    mensagens_wa_processadas ainda não foi criada no banco) é tratado como "proteção
+    indisponível por enquanto" - NÃO bloqueia a mensagem. Sem essa distinção, se só
+    metade da configuração (tabela OU campo do n8n) tivesse sido feita, TODA mensagem
+    seria erroneamente tratada como duplicata, travando o robô por completo."""
     if not mensagem_id:
         return None
     db = get_db()
@@ -166,7 +174,7 @@ def verificar_mensagem_duplicada(mensagem_id: Optional[str], conversa_id: str) -
         cur.execute("INSERT INTO mensagens_wa_processadas (id, conversa_id) VALUES (%s, %s)", (mensagem_id, conversa_id))
         db.commit()
         return None  # é novidade, segue o processamento normal
-    except psycopg2.Error:
+    except psycopg2.errors.UniqueViolation:
         db.rollback()
         try:
             cur.execute(
@@ -177,6 +185,15 @@ def verificar_mensagem_duplicada(mensagem_id: Optional[str], conversa_id: str) -
             return row["conteudo"] if row else "Só um segundo, já te respondo! 😊"
         except psycopg2.Error:
             return "Só um segundo, já te respondo! 😊"
+    except psycopg2.Error as e:
+        # Qualquer outro erro (ex: a tabela mensagens_wa_processadas não existe ainda) -
+        # NÃO bloqueia a mensagem, só desativa essa proteção específica desta vez.
+        db.rollback()
+        logger.warning(
+            f"Proteção contra mensagem duplicada indisponível (tabela pode não existir ainda): {e}",
+            extra={"evento": "dedup_indisponivel"},
+        )
+        return None
     finally:
         cur.close(); release_db(db)
 
@@ -213,9 +230,13 @@ def existe_mensagem_cliente_mais_nova(conversa_id: str, apos: Any) -> bool:
 
 
 def obter_historico(conversa_id: str) -> List[Dict[str, Any]]:
+    """Limitado a 20 mensagens (não 30) para economizar tokens de entrada em cada
+    chamada. Isso é seguro mesmo em conversas longas porque os FATOS importantes
+    (produto, tamanho, preço já calculado) já vivem na memória estruturada
+    (estado_pedido), não dependem só do texto cru sobrevivendo no histórico."""
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT remetente, conteudo FROM mensagens WHERE conversa_id=%s ORDER BY timestamp DESC LIMIT 30", (conversa_id,))
+    cur.execute("SELECT remetente, conteudo FROM mensagens WHERE conversa_id=%s ORDER BY timestamp DESC LIMIT 20", (conversa_id,))
     msgs = list(reversed(cur.fetchall()))
     cur.close(); release_db(db)
     return msgs
