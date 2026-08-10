@@ -1,328 +1,252 @@
 """
-As ferramentas (tool use) que a IA pode chamar durante a conversa: atualizar a memória
-estruturada do pedido, consultar o mínimo, calcular o orçamento oficial, fechar o
-pedido, transferir para um consultor humano, e tratar pedidos de privacidade (LGPD).
-
-Cada "executar_..." é a função Python de verdade que roda quando a IA chama a
-ferramenta correspondente. As notificações (fechar_pedido, transferir_para_consultor,
-solicitar_privacidade) são disparadas de dentro do loop de ferramentas em app/ia.py,
-não aqui - este módulo cuida só do cálculo/validação dos dados do pedido.
+Tudo que fala com o banco de dados: o pool de conexões, e as funções que
+buscam/criam/atualizam clientes, conversas, mensagens, estado do pedido e leads.
 """
-from typing import Any, Dict
+import re
+from typing import Any, Dict, List, Optional
 
-from app.config import logger, PRODUTOS_VALIDOS, MATERIAIS_VALIDOS, CORES_PRODUTO_VALIDAS
-from app.precos import (
-    ajustar_tamanho, espessura_mais_proxima, calcular_preco, calcular_pedido_minimo,
-    processar_item_pedido,
-)
-from app.database import salvar_estado_pedido, obter_estado_pedido
+import psycopg2
+import psycopg2.errors
+from psycopg2 import pool as pg_pool
+from psycopg2.extras import RealDictCursor, Json
+
+from app.config import logger, DATABASE_URL, SINAIS
+
+_db_pool: Optional[pg_pool.ThreadedConnectionPool] = None
 
 
-def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict[str, Any]:
-    """Executa a ferramenta 'atualizar_pedido': é o coração da memória estruturada da
-    conversa. Recebe os itens que a IA sabe sobre o pedido nesta chamada, MESCLA com o
-    que já estava salvo no banco (em vez de substituir cegamente), valida/ajusta cada
-    item, salva, e devolve o que falta em cada um - assim a IA nunca precisa perguntar
-    de novo algo que já foi respondido, e nenhum dado se perde se a IA esquecer de
-    reenviar algum campo numa chamada futura.
+def get_pool() -> pg_pool.ThreadedConnectionPool:
+    global _db_pool
+    if _db_pool is None:
+        _db_pool = pg_pool.ThreadedConnectionPool(1, 10, dsn=DATABASE_URL)
+    return _db_pool
 
-    IMPORTANTE (correção de bug real): antes, esta função confiava 100% na IA reenviar
-    a lista COMPLETA de campos em toda chamada. Se a IA esquecesse um campo (ex:
-    "produto") numa atualização parcial, esse dado sumia do estado salvo mesmo a IA
-    ainda "lembrando" dele na conversa em texto - causando o robô perguntar de novo
-    algo que o cliente já tinha respondido. Agora, cada item novo é mesclado com o
-    item na mesma posição do estado anterior: só os campos que vierem preenchidos
-    (não None) desta vez sobrescrevem o valor antigo; os demais são preservados."""
+
+def get_db() -> Any:
+    return get_pool().getconn()
+
+
+def release_db(db: Any) -> None:
+    get_pool().putconn(db)
+
+
+def verificar_conexao_db() -> bool:
     try:
-        itens_entrada = entrada.get("itens") or []
-        itens_anteriores = obter_estado_pedido(conversa_id).get("itens") or []
-
-        itens_mesclados = []
-        for i, item_novo in enumerate(itens_entrada):
-            item_antigo = itens_anteriores[i] if i < len(itens_anteriores) else {}
-            item_completo = {**item_antigo, **{k: v for k, v in item_novo.items() if v is not None}}
-            itens_mesclados.append(item_completo)
-
-        resultados = [processar_item_pedido(it) for it in itens_mesclados]
-        estado = {"itens": [r["item"] for r in resultados], "observacoes": entrada.get("observacoes", "")}
-        salvar_estado_pedido(conversa_id, estado)
-
-        itens_completos = sum(1 for r in resultados if r["completo"])
-        logger.info(
-            "Pedido atualizado",
-            extra={
-                "evento": "pedido_atualizado",
-                "conversa_id": conversa_id,
-                "itens": len(resultados),
-                "completos": itens_completos,
-            },
-        )
-
-        return {
-            "itens": [
-                {**r["item"], "ajustes_feitos": r["ajustes"], "faltando": r["faltando"],
-                 "completo": r["completo"], "preco_preview": r["preco_preview"]}
-                for r in resultados
-            ],
-            "observacoes": estado["observacoes"],
-            "total_itens": len(resultados),
-            "itens_completos": itens_completos,
-        }
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchone()
+        cur.close(); release_db(db)
+        return True
     except Exception as e:
-        logger.error(
-            "Falha ao atualizar pedido",
-            extra={"evento": "erro_atualizar_pedido", "conversa_id": conversa_id, "erro": str(e)},
-        )
-        return {"erro": "Não foi possível atualizar o pedido agora. Continue a conversa normalmente e tente de novo em seguida."}
+        logger.error("Health check: banco de dados não respondeu", extra={"evento": "health_db_falhou", "erro": str(e)})
+        return False
 
 
-def executar_consultar_pedido_minimo(entrada: Dict[str, Any]) -> Dict[str, Any]:
-    """Executa a ferramenta 'consultar_pedido_minimo': ajusta tamanho/espessura para valores
-    tecnicamente válidos e calcula o pedido mínimo real dessa combinação."""
+def limpar_telefone(telefone: str) -> str:
+    return re.sub(r'[^0-9]', '', telefone)[:20]
+
+
+def buscar_ou_criar_cliente(telefone: str) -> Dict[str, Any]:
+    telefone = limpar_telefone(telefone)
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
     try:
-        produto = entrada.get("produto")
-        largura = float(entrada["largura"])
-        altura = float(entrada["altura"])
-        espessura_pedida = float(entrada["espessura"])
-        cores_n = int(entrada["cores_n"])
-
-        largura, altura, ajustes = ajustar_tamanho(produto, largura, altura, cores_n)
-        espessura = espessura_mais_proxima(espessura_pedida, produto)
-        if abs(espessura - espessura_pedida) > 1e-6:
-            ajustes.append(f"espessura ajustada de {espessura_pedida:g}mm para {espessura:g}mm (opção disponível para este produto)")
-
-        minimo = calcular_pedido_minimo(largura, altura, espessura, cores_n)
-        return {
-            "largura_usada": largura, "altura_usada": altura, "espessura_usada": espessura,
-            "ajustes_feitos": ajustes,
-            "pedido_minimo_milheiros": minimo["milheiros_min"] if minimo else None,
-            "pedido_minimo_kg": minimo["kg_min"] if minimo else None,
-        }
-    except Exception as e:
-        logger.error(f"Erro na ferramenta consultar_pedido_minimo: {e}")
-        return {"erro": "Não foi possível calcular o mínimo para esses dados. Peça para o cliente confirmar produto, tamanho e espessura novamente."}
-
-
-CAMPOS_OBRIGATORIOS_ORCAMENTO = ["produto", "largura", "altura", "espessura", "cores_n", "milheiros"]
-
-
-def executar_calcular_orcamento(entrada: Dict[str, Any]) -> Dict[str, Any]:
-    """Executa a ferramenta 'calcular_orcamento': é a ÚNICA forma pela qual um preço final
-    chega até o cliente. A IA nunca calcula preço sozinha - só usa o que esta função devolve.
-
-    Formato de erro estruturado (em vez de só uma frase solta):
-      erro="dados_incompletos"  -> faltou informar algum campo obrigatório (ver campos_faltando)
-      erro="valor_invalido"     -> algum valor veio num formato/opção que não faz sentido
-      erro="fora_da_faixa"      -> os dados são válidos, mas o peso fica abaixo do mínimo (ver sugestoes)
-    Em todo erro, "mensagem" já vem pronta em português, pra IA usar (ou se inspirar) na resposta ao cliente.
-    """
-    campos_faltando = [c for c in CAMPOS_OBRIGATORIOS_ORCAMENTO if entrada.get(c) is None]
-    if campos_faltando:
-        logger.warning(
-            "calcular_orcamento chamado com dados incompletos",
-            extra={"evento": "orcamento_dados_incompletos", "campos_faltando": campos_faltando},
+        cur.execute(
+            "INSERT INTO clientes (telefone) VALUES (%s) ON CONFLICT (telefone) DO NOTHING RETURNING *",
+            (telefone,)
         )
-        return {
-            "erro": "dados_incompletos",
-            "mensagem": "Ainda preciso de mais alguns dados antes de calcular o preço: " + ", ".join(campos_faltando) + ".",
-            "campos_faltando": campos_faltando,
-        }
+        c = cur.fetchone()
+        db.commit()
+        if not c:
+            cur.execute("SELECT * FROM clientes WHERE telefone=%s", (telefone,))
+            c = cur.fetchone()
+    except psycopg2.Error:
+        db.rollback()
+        cur.execute("SELECT * FROM clientes WHERE telefone=%s", (telefone,))
+        c = cur.fetchone()
+        if not c:
+            cur.execute("INSERT INTO clientes (telefone) VALUES (%s) RETURNING *", (telefone,))
+            c = cur.fetchone()
+            db.commit()
+    cur.close(); release_db(db)
+    return dict(c)
 
-    produto = entrada.get("produto")
-    if produto not in PRODUTOS_VALIDOS:
-        return {
-            "erro": "valor_invalido",
-            "mensagem": f"'{produto}' não é um produto reconhecido. Confirme com o cliente qual produto ele quer, entre as opções válidas.",
-            "campos_faltando": ["produto"],
-        }
 
+def buscar_ou_criar_conversa(cliente_id: str) -> Dict[str, Any]:
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT * FROM conversas
+        WHERE cliente_id=%s
+          AND (status='ativa' OR ultima_mensagem > NOW() - INTERVAL '30 minutes')
+        ORDER BY ultima_mensagem DESC LIMIT 1
+    """, (cliente_id,))
+    c = cur.fetchone()
+    if not c:
+        cur.execute("INSERT INTO conversas (cliente_id) VALUES (%s) RETURNING *", (cliente_id,))
+        c = cur.fetchone()
+        db.commit()
+    cur.close(); release_db(db)
+    return dict(c)
+
+
+def obter_estado_pedido(conversa_id: str) -> Dict[str, Any]:
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
     try:
-        largura = float(entrada["largura"])
-        altura = float(entrada["altura"])
-        espessura_pedida = float(entrada["espessura"])
-        cores_n = int(entrada["cores_n"])
-        milheiros = float(entrada["milheiros"])
-    except (TypeError, ValueError) as e:
-        logger.warning(
-            "calcular_orcamento recebeu valor não numérico",
-            extra={"evento": "orcamento_valor_invalido", "detalhe": str(e)},
-        )
-        return {
-            "erro": "valor_invalido",
-            "mensagem": "Algum dos números do pedido (tamanho, espessura, cores ou quantidade) não ficou claro. Confirme esses valores com o cliente.",
-        }
+        cur.execute("SELECT estado_pedido FROM conversas WHERE id=%s", (conversa_id,))
+        row = cur.fetchone()
+        estado = row["estado_pedido"] if row else None
+        return estado if estado else {"itens": [], "observacoes": ""}
+    except psycopg2.Error:
+        db.rollback()
+        return {"itens": [], "observacoes": ""}
+    finally:
+        cur.close(); release_db(db)
 
-    material = entrada.get("material") or "Virgem BD"
-    if material not in MATERIAIS_VALIDOS:
-        material = "Virgem BD"
-    cor_produto = entrada.get("cor_produto") or "Transparente"
-    if cor_produto not in CORES_PRODUTO_VALIDAS:
-        cor_produto = "Transparente"
-    impressao = entrada.get("impressao") or "FRENTE"
-    imp_map = "IMPRESSÃO FRENTE / VERSO" if impressao == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
 
-    largura, altura, ajustes = ajustar_tamanho(produto, largura, altura, cores_n)
-    espessura = espessura_mais_proxima(espessura_pedida, produto)
-    if abs(espessura - espessura_pedida) > 1e-6:
-        ajustes.append(f"espessura ajustada de {espessura_pedida:g}mm para {espessura:g}mm (opção disponível para este produto)")
-
+def salvar_estado_pedido(conversa_id: str, estado: Dict[str, Any]) -> None:
+    db = get_db()
+    cur = db.cursor()
     try:
-        calc = calcular_preco(produto, material, largura, altura, cores_n, imp_map, milheiros, espessura=espessura)
-    except ValueError as e:
+        cur.execute("UPDATE conversas SET estado_pedido=%s WHERE id=%s", (Json(estado), conversa_id))
+        db.commit()
+    except psycopg2.Error as e:
+        db.rollback()
+        logger.warning(f"Não foi possível salvar estado_pedido (a coluna pode não existir ainda no banco): {e}")
+    finally:
+        cur.close(); release_db(db)
+
+
+def marcar_conversa_fechada(conversa_id: str) -> None:
+    db = get_db()
+    cur = db.cursor()
+    try:
+        cur.execute("UPDATE conversas SET status='fechada' WHERE id=%s", (conversa_id,))
+        db.commit()
+    except psycopg2.Error as e:
+        db.rollback()
+        logger.warning(f"Não foi possível marcar conversa como fechada: {e}")
+    finally:
+        cur.close(); release_db(db)
+
+
+def verificar_mensagem_duplicada(mensagem_id: Optional[str], conversa_id: str) -> Optional[str]:
+    if not mensagem_id:
+        return None
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("INSERT INTO mensagens_wa_processadas (id, conversa_id) VALUES (%s, %s)", (mensagem_id, conversa_id))
+        db.commit()
+        return None
+    except psycopg2.errors.UniqueViolation:
+        db.rollback()
+        try:
+            cur.execute(
+                "SELECT conteudo FROM mensagens WHERE conversa_id=%s AND remetente='ia' ORDER BY timestamp DESC LIMIT 1",
+                (conversa_id,)
+            )
+            row = cur.fetchone()
+            return row["conteudo"] if row else "Só um segundo, já te respondo! 😊"
+        except psycopg2.Error:
+            return "Só um segundo, já te respondo! 😊"
+    except psycopg2.Error as e:
+        db.rollback()
         logger.warning(
-            "Combinação sem preço na tabela",
-            extra={"evento": "orcamento_combinacao_invalida", "detalhe": str(e)},
+            f"Proteção contra mensagem duplicada indisponível (tabela pode não existir ainda): {e}",
+            extra={"evento": "dedup_indisponivel"},
         )
-        return {
-            "erro": "valor_invalido",
-            "mensagem": "Não encontrei preço para essa combinação de material, impressão e cores. Confirme os dados com o cliente.",
-        }
-    except Exception as e:
-        logger.error(
-            "Erro inesperado ao calcular preço",
-            extra={"evento": "orcamento_erro_inesperado", "erro": str(e)},
-        )
-        return {
-            "erro": "valor_invalido",
-            "mensagem": "Não foi possível calcular o preço agora. Diga ao cliente que vai confirmar com a equipe e retornar em breve. NÃO informe nenhum valor.",
-        }
-
-    if not calc["atende_minimo"]:
-        minimo_milheiros = calc["pedido_minimo_milheiros"]
-        logger.info(
-            "Pedido abaixo do peso mínimo",
-            extra={
-                "evento": "orcamento_fora_da_faixa",
-                "peso_kg": calc["peso_total_kg"],
-                "minimo_kg": calc["pedido_minimo_kg"],
-            },
-        )
-        return {
-            "erro": "fora_da_faixa",
-            "mensagem": (
-                f"Essa quantidade fica abaixo do peso mínimo de produção ({calc['pedido_minimo_kg']}kg). "
-                f"Para fechar, seria preciso pelo menos {minimo_milheiros:.1f} mil unidades."
-            ),
-            "sugestoes": [f"aumentar a quantidade para {minimo_milheiros:.1f} mil unidades"],
-            "pedido_minimo_milheiros": minimo_milheiros,
-            "peso_calculado_kg": calc["peso_total_kg"],
-            "peso_minimo_kg": calc["pedido_minimo_kg"],
-        }
-
-    return {
-        "produto": produto, "material": material, "cor_produto": cor_produto,
-        "largura_usada": largura, "altura_usada": altura, "espessura_usada": espessura,
-        "cores_n": cores_n, "impressao": impressao, "milheiros": milheiros,
-        "ajustes_feitos": ajustes,
-        "preco_por_milheiro": calc["milheiro"],
-        "preco_total": calc["total"],
-        "peso_total_kg": calc["peso_total_kg"],
-    }
+        return None
+    finally:
+        cur.close(); release_db(db)
 
 
-TOOLS = [
-    {
-        "name": "atualizar_pedido",
-        "description": "Chame esta ferramenta SEMPRE que o cliente informar qualquer dado novo sobre o pedido - mesmo que venha tudo numa mensagem só, ou aos poucos. Pode incluir MAIS DE UM item se o cliente mencionar vários tamanhos ou produtos na mesma mensagem (ex: '30x40, 40x50 e 50x50'). Envie a lista de itens do pedido, incluindo os novos dados desta mensagem - campos que você não souber ainda podem ficar de fora, o sistema preserva automaticamente o que já foi informado antes. O resultado te diz o que falta em cada item, então você nunca precisa perguntar de novo o que já foi informado.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "itens": {
-                    "type": "array",
-                    "description": "Lista de itens do pedido (um item = um produto+tamanho), na mesma ordem usada anteriormente na conversa. Inclua os novos dados aprendidos nesta mensagem.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "produto": {"type": "string", "enum": PRODUTOS_VALIDOS},
-                            "material": {"type": "string", "enum": MATERIAIS_VALIDOS},
-                            "cor_produto": {"type": "string", "enum": CORES_PRODUTO_VALIDAS},
-                            "largura": {"type": "number", "description": "largura em cm"},
-                            "altura": {"type": "number", "description": "altura em cm"},
-                            "espessura": {"type": "number", "description": "espessura em mm"},
-                            "cores_n": {"type": "integer", "description": "número de cores de impressão (0 se sem impressão)"},
-                            "impressao": {"type": "string", "enum": ["FRENTE", "FRENTE_VERSO"]},
-                            "milheiros": {"type": "number", "description": "quantidade em milheiros (mil unidades)"},
-                        },
-                    },
-                },
-                "observacoes": {"type": "string", "description": "Qualquer observação extra relevante sobre o pedido (opcional)."},
-            },
-            "required": ["itens"],
-        },
-    },
-    {
-        "name": "consultar_pedido_minimo",
-        "description": "Consulta o pedido mínimo (em mil unidades) para uma combinação de produto+tamanho+espessura+cores, ANTES de perguntar a quantidade ao cliente. Também ajusta tamanho/espessura para os valores tecnicamente disponíveis, se necessário. Use assim que tiver produto, largura, altura, espessura e número de cores.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "produto": {"type": "string", "enum": PRODUTOS_VALIDOS},
-                "largura": {"type": "number", "description": "largura em cm"},
-                "altura": {"type": "number", "description": "altura em cm"},
-                "espessura": {"type": "number", "description": "espessura em mm"},
-                "cores_n": {"type": "integer", "description": "número de cores de impressão (0 se sem impressão)"},
-            },
-            "required": ["produto", "largura", "altura", "espessura", "cores_n"],
-        },
-    },
-    {
-        "name": "calcular_orcamento",
-        "description": "Calcula o preço OFICIAL e final do pedido. É a única forma válida de informar preço ao cliente - NUNCA calcule ou estime um valor por conta própria. Use somente quando já tiver TODAS as informações: produto, material, tamanho, espessura, cores e quantidade em milheiros.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "produto": {"type": "string", "enum": PRODUTOS_VALIDOS},
-                "material": {"type": "string", "enum": MATERIAIS_VALIDOS, "description": "usa 'Virgem BD' se o cliente não especificou"},
-                "cor_produto": {"type": "string", "enum": CORES_PRODUTO_VALIDAS, "description": "cor da sacola em si (não afeta o preço, é só informativo). Use 'Transparente' se o cliente não especificou."},
-                "largura": {"type": "number", "description": "largura em cm"},
-                "altura": {"type": "number", "description": "altura em cm"},
-                "espessura": {"type": "number", "description": "espessura em mm"},
-                "cores_n": {"type": "integer", "description": "número de cores de impressão (0 se sem impressão)"},
-                "impressao": {"type": "string", "enum": ["FRENTE", "FRENTE_VERSO"]},
-                "milheiros": {"type": "number", "description": "quantidade pedida, em milheiros (mil unidades)"},
-            },
-            "required": ["produto", "material", "largura", "altura", "espessura", "cores_n", "impressao", "milheiros"],
-        },
-    },
-    {
-        "name": "fechar_pedido",
-        "description": "Chame esta ferramenta assim que o cliente confirmar claramente que quer fechar/prosseguir com o pedido (ex.: respondeu 'sim' depois de você perguntar 'Posso gerar a proposta?'). Isso avisa o consultor humano para finalizar a venda. Só chame depois de já ter apresentado um preço calculado (via calcular_orcamento) nesta conversa.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "resumo": {
-                    "type": "string",
-                    "description": "Resumo em texto corrido do pedido fechado: produto, tamanho, material, espessura, cores, quantidade em mil unidades e o preço total combinado.",
-                },
-            },
-            "required": ["resumo"],
-        },
-    },
-    {
-        "name": "transferir_para_consultor",
-        "description": "Chame esta ferramenta quando você não souber responder algo importante ao cliente, quando a pergunta estiver fora do que você sabe (fora de vendas de sacolas/sacos plásticos), ou quando o cliente pedir claramente para falar com uma pessoa/atendente humano. Isso avisa um consultor humano para assumir a conversa.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "motivo": {
-                    "type": "string",
-                    "description": "Resumo breve do que o cliente perguntou ou precisa, que você não conseguiu resolver sozinho.",
-                },
-            },
-            "required": ["motivo"],
-        },
-    },
-    {
-        "name": "solicitar_privacidade",
-        "description": "Chame esta ferramenta sempre que o cliente perguntar sobre os dados pessoais dele (o que guardamos, por quê), ou pedir para ver, corrigir, ou APAGAR/EXCLUIR os dados dele, ou se opuser ao uso dos dados (direitos da LGPD). NÃO apague nada sozinho - isso avisa um humano que vai executar o pedido com segurança.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "tipo": {"type": "string", "enum": ["acesso", "correcao", "exclusao", "duvida"], "description": "acesso = quer saber o que temos; correcao = quer corrigir algo; exclusao = quer apagar os dados; duvida = pergunta geral sobre privacidade"},
-                "detalhe": {"type": "string", "description": "O que exatamente o cliente pediu, em texto corrido."},
-            },
-            "required": ["tipo", "detalhe"],
-        },
-        "cache_control": {"type": "ephemeral"},
-    },
-]
+def salvar_mensagem(conversa_id: str, remetente: str, conteudo: str) -> Any:
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "INSERT INTO mensagens (conversa_id, remetente, conteudo) VALUES (%s,%s,%s) RETURNING timestamp",
+        (conversa_id, remetente, conteudo)
+    )
+    timestamp = cur.fetchone()["timestamp"]
+    cur.execute("UPDATE conversas SET ultima_mensagem=NOW() WHERE id=%s", (conversa_id,))
+    db.commit(); cur.close(); release_db(db)
+    return timestamp
+
+
+def existe_mensagem_cliente_mais_nova(conversa_id: str, apos: Any) -> bool:
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "SELECT 1 FROM mensagens WHERE conversa_id=%s AND remetente='cliente' AND timestamp > %s LIMIT 1",
+        (conversa_id, apos)
+    )
+    existe = cur.fetchone() is not None
+    cur.close(); release_db(db)
+    return existe
+
+
+def obter_historico(conversa_id: str) -> List[Dict[str, Any]]:
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT remetente, conteudo FROM mensagens WHERE conversa_id=%s ORDER BY timestamp DESC LIMIT 20", (conversa_id,))
+    msgs = list(reversed(cur.fetchall()))
+    cur.close(); release_db(db)
+    return msgs
+
+
+def calcular_score(conversa_id: str, cliente_id: str) -> Dict[str, Any]:
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT conteudo FROM mensagens WHERE conversa_id=%s AND remetente='cliente'", (conversa_id,))
+    msgs = cur.fetchall()
+    score = 0
+    detectados = set()
+    for msg in msgs:
+        texto = msg["conteudo"].lower()
+        for sinal, (keywords, pts) in SINAIS.items():
+            if sinal not in detectados and any(k in texto for k in keywords):
+                score += pts
+                detectados.add(sinal)
+    score = max(0, min(100, score))
+    categoria = "quente" if score >= 80 else "morno" if score >= 50 else "frio"
+    cur.execute("INSERT INTO leads (cliente_id, conversa_id, score, categoria) VALUES (%s,%s,%s,%s)", (cliente_id, conversa_id, score, categoria))
+    cur.execute("UPDATE conversas SET lead_score=%s WHERE id=%s", (score, conversa_id))
+    db.commit(); cur.close(); release_db(db)
+    return {"score": score, "categoria": categoria}
+
+
+def limpar_dados_antigos(meses: int = 12, modo_teste: bool = True) -> Dict[str, Any]:
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT c.id AS conversa_id, c.cliente_id, cl.telefone
+        FROM conversas c
+        JOIN clientes cl ON cl.id = c.cliente_id
+        WHERE c.ultima_mensagem < NOW() - (%s || ' months')::INTERVAL
+          AND NOT EXISTS (
+              SELECT 1 FROM notificacoes n
+              WHERE n.conversa_id = c.id AND n.tipo = 'pedido_fechado'
+          )
+    """, (meses,))
+    alvos = cur.fetchall()
+
+    if modo_teste:
+        cur.close(); release_db(db)
+        return {"modo": "teste", "conversas_que_seriam_removidas": len(alvos),
+                "telefones": [a["telefone"] for a in alvos]}
+
+    removidos = 0
+    for alvo in alvos:
+        cur.execute("DELETE FROM mensagens WHERE conversa_id=%s", (alvo["conversa_id"],))
+        cur.execute("DELETE FROM leads WHERE conversa_id=%s", (alvo["conversa_id"],))
+        cur.execute("DELETE FROM notificacoes WHERE conversa_id=%s", (alvo["conversa_id"],))
+        cur.execute("DELETE FROM conversas WHERE id=%s", (alvo["conversa_id"],))
+        cur.execute("DELETE FROM clientes WHERE id=%s", (alvo["cliente_id"],))
+        removidos += 1
+    db.commit()
+    cur.close(); release_db(db)
+    logger.info(f"Limpeza de dados antigos (LGPD): {removidos} clientes/conversas removidos (inativos há mais de {meses} meses, sem pedido fechado)")
+    return {"modo": "executado", "conversas_removidas": removidos}
