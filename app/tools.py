@@ -2,11 +2,6 @@
 As ferramentas (tool use) que a IA pode chamar durante a conversa: atualizar a memória
 estruturada do pedido, consultar o mínimo, calcular o orçamento oficial, fechar o
 pedido, transferir para um consultor humano, e tratar pedidos de privacidade (LGPD).
-
-Cada "executar_..." é a função Python de verdade que roda quando a IA chama a
-ferramenta correspondente. As notificações (fechar_pedido, transferir_para_consultor,
-solicitar_privacidade) são disparadas de dentro do loop de ferramentas em app/ia.py,
-não aqui - este módulo cuida só do cálculo/validação dos dados do pedido.
 """
 from typing import Any, Dict
 
@@ -15,18 +10,25 @@ from app.precos import (
     ajustar_tamanho, espessura_mais_proxima, calcular_preco, calcular_pedido_minimo,
     processar_item_pedido,
 )
-from app.database import salvar_estado_pedido
+from app.database import salvar_estado_pedido, obter_estado_pedido
 
 
 def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict[str, Any]:
-    """Executa a ferramenta 'atualizar_pedido': é o coração da memória estruturada da
-    conversa. Recebe TODOS os itens que a IA já sabe sobre o pedido (um ou vários
-    tamanhos/produtos), valida/ajusta cada um, salva como estado da conversa, e
-    devolve o que falta em cada item - assim a IA nunca precisa perguntar de novo
-    algo que já foi respondido."""
+    """Executa a ferramenta 'atualizar_pedido'. MESCLA com o estado anterior salvo no
+    banco em vez de substituir cegamente: campos que a IA não reenviar desta vez
+    (None/ausentes) são preservados do que já estava salvo, evitando perder dados se
+    a IA esquecer de reenviar algum campo numa chamada futura."""
     try:
         itens_entrada = entrada.get("itens") or []
-        resultados = [processar_item_pedido(it) for it in itens_entrada]
+        itens_anteriores = obter_estado_pedido(conversa_id).get("itens") or []
+
+        itens_mesclados = []
+        for i, item_novo in enumerate(itens_entrada):
+            item_antigo = itens_anteriores[i] if i < len(itens_anteriores) else {}
+            item_completo = {**item_antigo, **{k: v for k, v in item_novo.items() if v is not None}}
+            itens_mesclados.append(item_completo)
+
+        resultados = [processar_item_pedido(it) for it in itens_mesclados]
         estado = {"itens": [r["item"] for r in resultados], "observacoes": entrada.get("observacoes", "")}
         salvar_estado_pedido(conversa_id, estado)
 
@@ -60,8 +62,6 @@ def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict
 
 
 def executar_consultar_pedido_minimo(entrada: Dict[str, Any]) -> Dict[str, Any]:
-    """Executa a ferramenta 'consultar_pedido_minimo': ajusta tamanho/espessura para valores
-    tecnicamente válidos e calcula o pedido mínimo real dessa combinação."""
     try:
         produto = entrada.get("produto")
         largura = float(entrada["largura"])
@@ -90,15 +90,6 @@ CAMPOS_OBRIGATORIOS_ORCAMENTO = ["produto", "largura", "altura", "espessura", "c
 
 
 def executar_calcular_orcamento(entrada: Dict[str, Any]) -> Dict[str, Any]:
-    """Executa a ferramenta 'calcular_orcamento': é a ÚNICA forma pela qual um preço final
-    chega até o cliente. A IA nunca calcula preço sozinha - só usa o que esta função devolve.
-
-    Formato de erro estruturado (em vez de só uma frase solta):
-      erro="dados_incompletos"  -> faltou informar algum campo obrigatório (ver campos_faltando)
-      erro="valor_invalido"     -> algum valor veio num formato/opção que não faz sentido
-      erro="fora_da_faixa"      -> os dados são válidos, mas o peso fica abaixo do mínimo (ver sugestoes)
-    Em todo erro, "mensagem" já vem pronta em português, pra IA usar (ou se inspirar) na resposta ao cliente.
-    """
     campos_faltando = [c for c in CAMPOS_OBRIGATORIOS_ORCAMENTO if entrada.get(c) is None]
     if campos_faltando:
         logger.warning(
@@ -152,8 +143,6 @@ def executar_calcular_orcamento(entrada: Dict[str, Any]) -> Dict[str, Any]:
     try:
         calc = calcular_preco(produto, material, largura, altura, cores_n, imp_map, milheiros, espessura=espessura)
     except ValueError as e:
-        # calcular_preco levanta ValueError quando a combinação material/impressão/cores
-        # simplesmente não existe na tabela de preços.
         logger.warning(
             "Combinação sem preço na tabela",
             extra={"evento": "orcamento_combinacao_invalida", "detalhe": str(e)},
@@ -208,13 +197,13 @@ def executar_calcular_orcamento(entrada: Dict[str, Any]) -> Dict[str, Any]:
 TOOLS = [
     {
         "name": "atualizar_pedido",
-        "description": "Chame esta ferramenta SEMPRE que o cliente informar qualquer dado novo sobre o pedido - mesmo que venha tudo numa mensagem só, ou aos poucos. Pode incluir MAIS DE UM item se o cliente mencionar vários tamanhos ou produtos na mesma mensagem (ex: '30x40, 40x50 e 50x50'). Envie a lista COMPLETA de itens que você já conhece desta conversa (os de antes + os novos) - esta ferramenta substitui o estado anterior pelo que você enviar. O resultado te diz o que falta em cada item, então você nunca precisa perguntar de novo o que já foi informado.",
+        "description": "Chame esta ferramenta SEMPRE que o cliente informar qualquer dado novo sobre o pedido - mesmo que venha tudo numa mensagem só, ou aos poucos. Pode incluir MAIS DE UM item se o cliente mencionar vários tamanhos ou produtos na mesma mensagem (ex: '30x40, 40x50 e 50x50'). Envie a lista de itens do pedido, incluindo os novos dados desta mensagem - campos que você não souber ainda podem ficar de fora, o sistema preserva automaticamente o que já foi informado antes. O resultado te diz o que falta em cada item, então você nunca precisa perguntar de novo o que já foi informado.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "itens": {
                     "type": "array",
-                    "description": "Lista de TODOS os itens do pedido que você já sabe (um item = um produto+tamanho). Inclua os já conhecidos de mensagens anteriores MAIS os novos desta mensagem.",
+                    "description": "Lista de itens do pedido (um item = um produto+tamanho), na mesma ordem usada anteriormente na conversa. Inclua os novos dados aprendidos nesta mensagem.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -308,8 +297,6 @@ TOOLS = [
             },
             "required": ["tipo", "detalhe"],
         },
-        # Marca até aqui como cacheável: a lista de ferramentas é sempre a mesma,
-        # então não faz sentido pagar o preço cheio dela em toda chamada.
         "cache_control": {"type": "ephemeral"},
     },
 ]
