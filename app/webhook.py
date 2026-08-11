@@ -22,6 +22,10 @@ from app.precos import recarregar_tabela_precos
 
 bp = Blueprint("webhook", __name__)
 
+# Palavras que, numa resposta curta logo após um orçamento, indicam recusa.
+# Ficam aqui (não dentro da função) para não recriar a lista a cada requisição.
+PALAVRAS_RECUSA_ORCAMENTO = ["não", "nao", "deixa", "desisto", "sem interesse", "outra hora", "obrigad"]
+
 
 @bp.route("/webhook", methods=["POST"])
 @limiter.limit("30 per minute")  # bem acima do que um uso normal precisa, mas trava abuso/DoS
@@ -104,6 +108,23 @@ def webhook():
                 "ESTADO ATUAL DO PEDIDO (já confirmado nesta conversa - NÃO pergunte de novo o que já está aqui):\n"
                 + json.dumps(estado_atual, ensure_ascii=False)
             )
+
+        # Detecta se a mensagem do cliente é uma recusa curta logo após você ter
+        # apresentado um orçamento. Fica aqui (contexto dinâmico, não no SYSTEM_PROMPT
+        # fixo) de propósito: essa instrução só custa tokens/atenção da IA nas conversas
+        # onde realmente se aplica, em vez de inflar o prompt fixo (cacheado, pago em
+        # toda chamada) com mais uma regra permanente para um caso específico.
+        if len(historico) >= 2 and historico[-2]["remetente"] == "ia" and "Orçamento Plastcustom" in historico[-2]["conteudo"]:
+            mensagem_curta = len(mensagem) < 60
+            parece_recusa = mensagem_curta and any(p in mensagem.lower() for p in PALAVRAS_RECUSA_ORCAMENTO)
+            if parece_recusa:
+                partes_contexto_extra.append(
+                    "CONTEXTO: você acabou de apresentar um orçamento e o cliente respondeu recusando "
+                    "de forma direta e curta. NÃO encerre a conversa educadamente sem reagir - pergunte "
+                    "o motivo de forma leve (valor, quantidade, prazo?) e ofereça pelo menos UMA "
+                    "alternativa concreta (menos cores, mais quantidade para baixar o preço por unidade, "
+                    "outro material, ou segurar o preço por 7 dias) antes de aceitar como resposta final."
+                )
 
         contexto_extra = "\n\n".join(partes_contexto_extra)
         resposta = gerar_resposta(messages, contexto_extra, cliente, conversa)
