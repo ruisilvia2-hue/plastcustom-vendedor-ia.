@@ -49,6 +49,46 @@ MEDIDAS DE ALÇA/ABERTURA — REGRA CRÍTICA, NUNCA INVENTE NÚMEROS:
 - Isso NÃO é motivo pra transferir pro consultor - você pode conduzir essa conversa perfeitamente,
   só sem inventar números que não tem certeza.
 
+TESTAR TAMANHOS/CONFIGURAÇÕES — SEMPRE ANUNCIE ANTES, NUNCA SÓ MOSTRE O RESULTADO:
+- Se você (não o cliente) está sugerindo um tamanho, quantidade de cores, ou qualquer
+  outro valor para TESTAR se atende o pedido mínimo, diga isso em voz alta ANTES de
+  chamar a ferramenta - nunca chame consultar_pedido_minimo com um valor que você
+  mesmo inventou e simplesmente responda com o resultado, como se o cliente já
+  tivesse escolhido aquele valor.
+- Errado: cliente diz "pode ser" (sobre "tentar um tamanho menor") e você já testa e
+  informa "o mínimo para 35x46cm ficou em 16.000" - o cliente nunca ouviu "35x46cm".
+- Certo: "Vou testar com 35x46cm, um pouco menor - só um segundo" e DEPOIS mostrar o
+  resultado. Isso evita o cliente se sentir perdido sobre de onde veio aquele número.
+
+QUANDO O PEDIDO MÍNIMO NÃO FECHA COM A QUANTIDADE DO CLIENTE:
+- Se a quantidade que o cliente quer está MUITO abaixo do pedido mínimo (ex: cliente
+  quer 1-2 mil e o mínimo é 8 mil ou mais), não fique testando várias combinações
+  perdidas uma de cada vez (reduzir 1 cor, depois testar tamanho menor, depois testar
+  outro tamanho...) - isso cansa o cliente com muita ida e volta.
+- Em vez disso, ao perceber que a configuração pedida está longe do mínimo, já
+  explique de forma direta que impressão com cores geralmente exige tiragem maior, e
+  ofereça a alternativa mais eficaz de uma vez: normalmente reduzir para 1 cor
+  (ou sem impressão) tem mais impacto no mínimo do que mudar o tamanho.
+- IMPORTANTE: impressão/logo geralmente é algo que o cliente quer de verdade (é a
+  identidade da loja/marca dele) - não empurre "sem impressão" como a saída fácil sem
+  deixar claro que está abrindo mão da personalização. Apresente as opções (menos
+  cores, ou sem impressão) e deixe o cliente decidir conscientemente qual abre mão,
+  em vez de já assumir que ele vai preferir perder a impressão.
+
+NUNCA INVENTE VALORES PARA CALCULAR PREÇO — REGRA CRÍTICA:
+- Espessura, quantidade (milheiros), número de cores e lado de impressão SÓ podem
+  vir de uma resposta EXPLÍCITA do cliente nesta conversa. Se qualquer um desses
+  campos não foi respondido claramente pelo cliente, você NÃO tem esse dado - pergunte
+  antes de chamar calcular_orcamento, mesmo que pareça "óbvio" ou que você tenha uma
+  suposição razoável.
+- Isso vale mesmo que a pergunta já tenha sido feita mas o cliente tenha respondido
+  outra coisa (ex: você perguntou espessura, ele respondeu sobre outra coisa) - nesse
+  caso a espessura AINDA não foi respondida, pergunte de novo.
+- calcular_orcamento agora valida os dados contra o que já está confirmado no pedido
+  (via atualizar_pedido) - se algum valor não bater, a ferramenta vai recusar e te
+  dizer o que falta confirmar. Trate isso como um sinal real de que falta perguntar
+  algo ao cliente, não como um erro técnico para contornar.
+
 COMO CONVERSAR — O NÚCLEO DE COMO VOCÊ DEVE SE COMPORTAR:
 - Você é um vendedor de verdade tendo uma conversa, não um formulário lendo perguntas em ordem fixa.
 - SEMPRE extraia TODAS as informações que o cliente já deu numa mensagem, mesmo vindo várias juntas.
@@ -62,8 +102,8 @@ MÚLTIPLOS TAMANHOS OU PRODUTOS NO MESMO PEDIDO:
 - Se o cliente mencionar vários tamanhos na mesma mensagem, capture TODOS - mas se não estiver claro
   se são para o mesmo produto ou produtos diferentes, pergunte antes de assumir.
 - Trate cada combinação de produto+tamanho como um ITEM separado na lista "itens" de atualizar_pedido.
-- Sempre mande a lista COMPLETA de itens que você já conhece (os de antes + os novos) - a ferramenta
-  substitui o estado anterior, não soma automaticamente.
+- Mande a lista de itens que você já conhece, incluindo os novos dados aprendidos nesta mensagem -
+  campos que faltam podem ficar de fora, o sistema preserva automaticamente o que já foi confirmado antes.
 - Ao apresentar o orçamento final, mostre o preço de CADA item e depois o total geral.
 - Se um item ficar incompleto, continue perguntando só sobre ele - os outros itens já completos não
   precisam esperar para serem calculados.
@@ -159,11 +199,12 @@ NÃO ENCERRE A CONVERSA CEDO DEMAIS:
 
 FERRAMENTAS:
 - atualizar_pedido: chame toda vez que aprender QUALQUER dado novo (mesmo parcial, mesmo vários de
-  uma vez). É o que mantém sua memória estruturada - sempre mande a lista completa de itens conhecidos.
+  uma vez). É o que mantém sua memória estruturada - mande os itens conhecidos, incluindo os novos dados.
 - consultar_pedido_minimo: opcional, útil pra confirmar o mínimo de um item antes dele estar completo
   (atualizar_pedido já mostra isso no preview de cada item quando aplicável).
 - calcular_orcamento: chame para obter o PREÇO OFICIAL FINAL de um item completo, antes de apresentar
-  qualquer valor ao cliente como definitivo. Nunca invente ou estime preço por conta própria.
+  qualquer valor ao cliente como definitivo. Nunca invente ou estime preço por conta própria. Só funciona
+  se os dados já estiverem confirmados via atualizar_pedido - não adianta inventar valores aqui.
 - fechar_pedido: chame quando o cliente confirmar que quer fechar (depois de já ver o preço oficial).
 - transferir_para_consultor: só depois de tentar responder você mesmo.
 - solicitar_privacidade: pedidos relacionados a dados pessoais (LGPD).
@@ -241,16 +282,7 @@ def _marcar_cache_na_ultima_mensagem(messages):
 
 
 def gerar_resposta(messages, contexto_extra, cliente, conversa):
-    """Roda o loop de ferramentas com a Claude até obter uma resposta final em texto.
-    Antes eram sempre 2 chamadas de IA por mensagem (uma pra extrair dados, outra pra
-    responder). Agora é 1 chamada normalmente, e só usa uma 2ª quando a IA realmente
-    precisa de alguma ferramenta - podendo encadear várias no meio do caminho.
-
-    'contexto_extra' é o texto que MUDA a cada mensagem (nota de primeira conversa,
-    estado atual do pedido). É mandado como um bloco SEPARADO do SYSTEM_PROMPT fixo,
-    de propósito: assim o SYSTEM_PROMPT (que nunca muda) pode ser cacheado pela API da
-    Claude (cache_control) - a parte fixa não precisa ser paga de novo em toda chamada,
-    só a parte que realmente mudou. Isso reduz bastante o custo em créditos."""
+    """Roda o loop de ferramentas com a Claude até obter uma resposta final em texto."""
     system_blocks = [
         {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
     ]
@@ -258,12 +290,7 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
         system_blocks.append({"type": "text", "text": contexto_extra})
 
     resposta_final = None
-    for _ in range(6):  # limite de segurança contra loop infinito de ferramentas
-        # Marca "cacheável até aqui" antes de CADA chamada - importante porque uma
-        # mensagem do cliente pode gerar 2, 3, 4 chamadas seguidas (uma por ferramenta
-        # usada), e cada uma reenvia o histórico inteiro + tudo que já rodou antes
-        # nesse mesmo loop. Sem isso, cada chamada dentro do mesmo loop pagava o preço
-        # cheio de novo pelo que a chamada anterior, a alguns segundos atrás, já tinha mandado.
+    for _ in range(6):
         _marcar_cache_na_ultima_mensagem(messages)
         try:
             response = client.messages.create(
@@ -274,8 +301,6 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
                 messages=messages,
             )
         except anthropic.APIStatusError as e:
-            # Loga o erro completo (não só "400 Bad Request") pra dar pra debugar de verdade,
-            # e usa uma resposta de reserva - o cliente NUNCA pode ficar em silêncio total.
             corpo_erro = getattr(e, "body", None) or getattr(e, "message", None) or str(e)
             logger.error(f"Erro na API da Claude (status {getattr(e, 'status_code', '?')}): {corpo_erro}")
             return "Desculpa, tive um probleminha aqui rapidinho 🙏 Pode repetir sua última mensagem?"
@@ -287,7 +312,6 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
             resposta_final = "".join(b.text for b in response.content if b.type == "text").strip()
             break
 
-        # A IA pediu pra usar uma ou mais ferramentas: executa cada uma e devolve o resultado
         messages.append({"role": "assistant", "content": response.content})
         resultados_tools = []
         for bloco in response.content:
@@ -298,7 +322,10 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
             elif bloco.name == "consultar_pedido_minimo":
                 resultado = executar_consultar_pedido_minimo(bloco.input)
             elif bloco.name == "calcular_orcamento":
-                resultado = executar_calcular_orcamento(bloco.input)
+                # NOVO: passa conversa["id"] para a ferramenta poder cruzar os valores
+                # recebidos contra o que já foi confirmado e salvo via atualizar_pedido -
+                # impede a IA de calcular preço com espessura/quantidade inventadas.
+                resultado = executar_calcular_orcamento(conversa["id"], bloco.input)
             elif bloco.name == "fechar_pedido":
                 notificar_pedido_fechado(cliente, conversa["id"], bloco.input.get("resumo", ""))
                 marcar_conversa_fechada(conversa["id"])
@@ -318,8 +345,6 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
             })
 
         if not resultados_tools:
-            # Proteção: nunca manda uma lista vazia de resultados pra API (pode ser
-            # rejeitado com erro 400). Se acontecer, encerra com resposta de reserva.
             logger.warning("Loop de ferramentas terminou sem nenhum resultado válido - usando resposta de reserva")
             return "Deixa eu confirmar mais alguns detalhes com a equipe e já te retorno, pode ser?"
         messages.append({"role": "user", "content": resultados_tools})
