@@ -2,6 +2,11 @@
 As ferramentas (tool use) que a IA pode chamar durante a conversa: atualizar a memória
 estruturada do pedido, consultar o mínimo, calcular o orçamento oficial, fechar o
 pedido, transferir para um consultor humano, e tratar pedidos de privacidade (LGPD).
+
+Cada "executar_..." é a função Python de verdade que roda quando a IA chama a
+ferramenta correspondente. As notificações (fechar_pedido, transferir_para_consultor,
+solicitar_privacidade) são disparadas de dentro do loop de ferramentas em app/ia.py,
+não aqui - este módulo cuida só do cálculo/validação dos dados do pedido.
 """
 from typing import Any, Dict
 
@@ -14,10 +19,20 @@ from app.database import salvar_estado_pedido, obter_estado_pedido
 
 
 def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict[str, Any]:
-    """Executa a ferramenta 'atualizar_pedido'. MESCLA com o estado anterior salvo no
-    banco em vez de substituir cegamente: campos que a IA não reenviar desta vez
-    (None/ausentes) são preservados do que já estava salvo, evitando perder dados se
-    a IA esquecer de reenviar algum campo numa chamada futura."""
+    """Executa a ferramenta 'atualizar_pedido': é o coração da memória estruturada da
+    conversa. Recebe os itens que a IA sabe sobre o pedido nesta chamada, MESCLA com o
+    que já estava salvo no banco (em vez de substituir cegamente), valida/ajusta cada
+    item, salva, e devolve o que falta em cada um - assim a IA nunca precisa perguntar
+    de novo algo que já foi respondido, e nenhum dado se perde se a IA esquecer de
+    reenviar algum campo numa chamada futura.
+
+    CORREÇÃO DE BUG REAL: antes, esta função confiava 100% na IA reenviar a lista
+    COMPLETA de campos em toda chamada. Se a IA esquecesse um campo (ex: "produto")
+    numa atualização parcial, esse dado sumia do estado salvo - causando o robô
+    perguntar de novo algo que o cliente já tinha respondido. Agora, cada item novo é
+    mesclado com o item na mesma posição do estado anterior: só os campos que vierem
+    preenchidos (não None) desta vez sobrescrevem o valor antigo; os demais são
+    preservados."""
     try:
         itens_entrada = entrada.get("itens") or []
         itens_anteriores = obter_estado_pedido(conversa_id).get("itens") or []
@@ -62,6 +77,8 @@ def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict
 
 
 def executar_consultar_pedido_minimo(entrada: Dict[str, Any]) -> Dict[str, Any]:
+    """Executa a ferramenta 'consultar_pedido_minimo': ajusta tamanho/espessura para valores
+    tecnicamente válidos e calcula o pedido mínimo real dessa combinação."""
     try:
         produto = entrada.get("produto")
         largura = float(entrada["largura"])
@@ -87,9 +104,28 @@ def executar_consultar_pedido_minimo(entrada: Dict[str, Any]) -> Dict[str, Any]:
 
 
 CAMPOS_OBRIGATORIOS_ORCAMENTO = ["produto", "largura", "altura", "espessura", "cores_n", "milheiros"]
+CAMPOS_CRITICOS_ORCAMENTO = ["espessura", "cores_n", "impressao", "milheiros"]
 
 
-def executar_calcular_orcamento(entrada: Dict[str, Any]) -> Dict[str, Any]:
+def executar_calcular_orcamento(conversa_id: str, entrada: Dict[str, Any]) -> Dict[str, Any]:
+    """Executa a ferramenta 'calcular_orcamento': é a ÚNICA forma pela qual um preço final
+    chega até o cliente. A IA nunca calcula preço sozinha - só usa o que esta função devolve.
+
+    CORREÇÃO DE BUG REAL: antes, esta função só checava se os campos vinham PREENCHIDOS,
+    não se realmente vieram do cliente. Isso permitiu um caso real onde a IA calculou e
+    apresentou um orçamento com espessura e quantidade INVENTADAS (nunca respondidas pelo
+    cliente), gerando um preço errado e uma venda perdida. Agora, antes de calcular,
+    cruzamos os valores recebidos contra o estado_pedido salvo (populado só através de
+    atualizar_pedido, a partir de respostas reais do cliente) - se não bater, recusamos.
+
+    Formato de erro estruturado (em vez de só uma frase solta):
+      erro="dados_incompletos"          -> faltou informar algum campo obrigatório
+      erro="nao_confirmado"             -> este item não está salvo no pedido confirmado
+      erro="divergencia_do_estado_salvo" -> algum valor não bate com o que já foi confirmado
+      erro="valor_invalido"             -> algum valor veio num formato/opção que não faz sentido
+      erro="fora_da_faixa"              -> dados válidos, mas o peso fica abaixo do mínimo
+    Em todo erro, "mensagem" já vem pronta em português, pra IA usar (ou se inspirar) na resposta ao cliente.
+    """
     campos_faltando = [c for c in CAMPOS_OBRIGATORIOS_ORCAMENTO if entrada.get(c) is None]
     if campos_faltando:
         logger.warning(
@@ -103,6 +139,41 @@ def executar_calcular_orcamento(entrada: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     produto = entrada.get("produto")
+
+    # Cross-check contra o estado salvo: a ÚNICA fonte confiável do que o cliente já
+    # confirmou de verdade, alimentada por atualizar_pedido (nunca por esta ferramenta).
+    itens_salvos = obter_estado_pedido(conversa_id).get("itens") or []
+    item_correspondente = next(
+        (it for it in itens_salvos if it.get("produto") == produto
+         and it.get("largura") == entrada.get("largura")
+         and it.get("altura") == entrada.get("altura")),
+        None,
+    )
+    if item_correspondente is None:
+        logger.warning(
+            "calcular_orcamento chamado sem item correspondente confirmado no estado",
+            extra={"evento": "orcamento_nao_confirmado", "conversa_id": conversa_id, "produto": produto},
+        )
+        return {
+            "erro": "nao_confirmado",
+            "mensagem": "Estes dados ainda não foram confirmados e salvos no pedido. Chame atualizar_pedido primeiro com os dados que o cliente já confirmou nesta conversa, e pergunte ao cliente qualquer campo que ainda esteja faltando - não calcule com valores supostos.",
+        }
+
+    divergentes = [
+        c for c in CAMPOS_CRITICOS_ORCAMENTO
+        if item_correspondente.get(c) is not None and item_correspondente.get(c) != entrada.get(c)
+    ]
+    if divergentes:
+        logger.warning(
+            "calcular_orcamento com valores divergentes do estado salvo",
+            extra={"evento": "orcamento_divergencia", "conversa_id": conversa_id, "campos": divergentes},
+        )
+        return {
+            "erro": "divergencia_do_estado_salvo",
+            "mensagem": f"Os valores de {', '.join(divergentes)} não batem com o que está salvo no pedido confirmado. Use os valores que o cliente já confirmou (via atualizar_pedido), ou pergunte de novo se realmente mudou e atualize o pedido antes de calcular.",
+            "campos_divergentes": divergentes,
+        }
+
     if produto not in PRODUTOS_VALIDOS:
         return {
             "erro": "valor_invalido",
@@ -241,7 +312,7 @@ TOOLS = [
     },
     {
         "name": "calcular_orcamento",
-        "description": "Calcula o preço OFICIAL e final do pedido. É a única forma válida de informar preço ao cliente - NUNCA calcule ou estime um valor por conta própria. Use somente quando já tiver TODAS as informações: produto, material, tamanho, espessura, cores e quantidade em milheiros.",
+        "description": "Calcula o preço OFICIAL e final do pedido. É a única forma válida de informar preço ao cliente - NUNCA calcule ou estime um valor por conta própria. Use somente quando já tiver TODAS as informações confirmadas pelo cliente e salvas via atualizar_pedido: produto, material, tamanho, espessura, cores e quantidade em milheiros. Se algum valor não foi confirmado pelo cliente, esta ferramenta vai recusar - não tente contornar inventando o dado.",
         "input_schema": {
             "type": "object",
             "properties": {
