@@ -33,7 +33,7 @@ CORES DO PRODUTO (a cor da sacola em si - diferente da cor de impressão da logo
   Branca / Preta / Azul / Vermelha / Verde / Amarela / Laranja / Cinza / Transparente / Natural
   Não afeta o preço. "Transparente" é o padrão se o cliente não escolher.
 ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa:
-  - Sacola Camiseta: 0,003 / 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,028 / 0,035 / 0,045
+  - Sacola Camiseta: 0,003 / 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,010 / 0,011 / 0,012 / 0,013 / 0,014
   - Sacola Vazada, Saco Impresso Solda Fundo, Saco com Aba: 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,010 / 0,011 / 0,012 / 0,013 / 0,014 / 0,045
 IMPRESSÃO: até 6 cores, frente e/ou verso. Clichê cobrado à parte na primeira compra.
 
