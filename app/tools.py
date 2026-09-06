@@ -13,7 +13,7 @@ from typing import Any, Dict
 from app.config import logger, PRODUTOS_VALIDOS, MATERIAIS_VALIDOS, CORES_PRODUTO_VALIDAS
 from app.precos import (
     ajustar_tamanho, espessura_mais_proxima, calcular_preco, calcular_pedido_minimo,
-    processar_item_pedido,
+    processar_item_pedido, ESPESSURAS_POR_PRODUTO,
 )
 from app.database import salvar_estado_pedido, obter_estado_pedido
 
@@ -78,15 +78,40 @@ def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict
 
 def executar_consultar_pedido_minimo(entrada: Dict[str, Any]) -> Dict[str, Any]:
     """Executa a ferramenta 'consultar_pedido_minimo': ajusta tamanho/espessura para valores
-    tecnicamente válidos e calcula o pedido mínimo real dessa combinação."""
+    tecnicamente válidos e calcula o pedido mínimo real dessa combinação.
+
+    IMPORTANTE: 'espessura' é OPCIONAL aqui de propósito. Se o cliente ainda não informou a
+    espessura, a IA NÃO PODE inventar um valor só para preencher o campo - nesse caso, a
+    ferramenta calcula uma FAIXA real (do mínimo com a espessura mais fina até o mínimo com a
+    mais grossa disponível para o produto), em vez de um número único baseado num palpite."""
     try:
         produto = entrada.get("produto")
         largura = float(entrada["largura"])
         altura = float(entrada["altura"])
-        espessura_pedida = float(entrada["espessura"])
         cores_n = int(entrada["cores_n"])
+        espessura_pedida = entrada.get("espessura")
 
         largura, altura, ajustes = ajustar_tamanho(produto, largura, altura, cores_n)
+
+        if espessura_pedida is None:
+            opcoes = ESPESSURAS_POR_PRODUTO.get(produto)
+            if not opcoes:
+                return {"erro": "Não foi possível calcular o mínimo sem saber o produto. Confirme o produto com o cliente."}
+            minimo_fino = calcular_pedido_minimo(largura, altura, min(opcoes), cores_n)
+            minimo_grosso = calcular_pedido_minimo(largura, altura, max(opcoes), cores_n)
+            return {
+                "largura_usada": largura, "altura_usada": altura,
+                "espessura_usada": None,
+                "ajustes_feitos": ajustes,
+                "aviso": "Espessura ainda não informada pelo cliente - mínimo calculado como FAIXA (mais fina a mais grossa). Não apresente um número único ao cliente; ou peça a espessura exata, ou informe essa faixa deixando claro que varia conforme a espessura.",
+                "pedido_minimo_milheiros_faixa": [
+                    minimo_grosso["milheiros_min"] if minimo_grosso else None,
+                    minimo_fino["milheiros_min"] if minimo_fino else None,
+                ],
+                "pedido_minimo_kg": minimo_fino["kg_min"] if minimo_fino else None,
+            }
+
+        espessura_pedida = float(espessura_pedida)
         espessura = espessura_mais_proxima(espessura_pedida, produto)
         if abs(espessura - espessura_pedida) > 1e-6:
             ajustes.append(f"espessura ajustada de {espessura_pedida:g}mm para {espessura:g}mm (opção disponível para este produto)")
@@ -297,17 +322,17 @@ TOOLS = [
     },
     {
         "name": "consultar_pedido_minimo",
-        "description": "Consulta o pedido mínimo (em mil unidades) para uma combinação de produto+tamanho+espessura+cores, ANTES de perguntar a quantidade ao cliente. Também ajusta tamanho/espessura para os valores tecnicamente disponíveis, se necessário. Use assim que tiver produto, largura, altura, espessura e número de cores.",
+        "description": "Consulta o pedido mínimo (em mil unidades) para uma combinação de produto+tamanho+cores, ANTES de perguntar a quantidade ao cliente. Também ajusta tamanho para os valores tecnicamente disponíveis, se necessário. Use assim que tiver produto, largura, altura e número de cores. O campo 'espessura' é OPCIONAL: só preencha se o cliente já informou esse valor explicitamente nesta conversa - NUNCA invente uma espessura para preencher este campo. Se a espessura ainda não foi informada, chame a ferramenta sem ela: a ferramenta devolve uma FAIXA (mínimo mais fino a mais grosso) em vez de travar.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "produto": {"type": "string", "enum": PRODUTOS_VALIDOS},
                 "largura": {"type": "number", "description": "largura em cm"},
                 "altura": {"type": "number", "description": "altura em cm"},
-                "espessura": {"type": "number", "description": "espessura em mm"},
+                "espessura": {"type": "number", "description": "espessura em mm - OPCIONAL: só envie se o cliente já respondeu isso explicitamente, nunca invente um valor"},
                 "cores_n": {"type": "integer", "description": "número de cores de impressão (0 se sem impressão)"},
             },
-            "required": ["produto", "largura", "altura", "espessura", "cores_n"],
+            "required": ["produto", "largura", "altura", "cores_n"],
         },
     },
     {
