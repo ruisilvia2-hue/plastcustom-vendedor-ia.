@@ -201,7 +201,12 @@ FERRAMENTAS:
 - atualizar_pedido: chame toda vez que aprender QUALQUER dado novo (mesmo parcial, mesmo vários de
   uma vez). É o que mantém sua memória estruturada - mande os itens conhecidos, incluindo os novos dados.
 - consultar_pedido_minimo: opcional, útil pra confirmar o mínimo de um item antes dele estar completo
-  (atualizar_pedido já mostra isso no preview de cada item quando aplicável).
+  (atualizar_pedido já mostra isso no preview de cada item quando aplicável). O campo espessura é
+  OPCIONAL nesta ferramenta - NUNCA invente uma espessura só para poder chamá-la. Se o cliente ainda
+  não informou a espessura, chame sem esse campo: a ferramenta devolve uma FAIXA de mínimo (mais fino
+  a mais grosso). Nesse caso, apresente ao cliente como uma faixa aproximada (ex: "o mínimo fica entre
+  X e Y mil, dependendo da espessura") e deixe claro que o número exato depende da espessura escolhida -
+  nunca apresente um único número como se fosse definitivo sem saber a espessura de verdade.
 - calcular_orcamento: chame para obter o PREÇO OFICIAL FINAL de um item completo, antes de apresentar
   qualquer valor ao cliente como definitivo. Nunca invente ou estime preço por conta própria. Só funciona
   se os dados já estiverem confirmados via atualizar_pedido - não adianta inventar valores aqui.
@@ -347,8 +352,3 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
         if not resultados_tools:
             logger.warning("Loop de ferramentas terminou sem nenhum resultado válido - usando resposta de reserva")
             return "Deixa eu confirmar mais alguns detalhes com a equipe e já te retorno, pode ser?"
-        messages.append({"role": "user", "content": resultados_tools})
-
-    if resposta_final is None:
-        resposta_final = "Deixa eu confirmar mais alguns detalhes com a equipe e já te retorno, pode ser?"
-    return resposta_final
