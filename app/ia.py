@@ -33,7 +33,7 @@ CORES DO PRODUTO (a cor da sacola em si - diferente da cor de impressão da logo
   Branca / Preta / Azul / Vermelha / Verde / Amarela / Laranja / Cinza / Transparente / Natural
   Não afeta o preço. "Transparente" é o padrão se o cliente não escolher.
 ESPESSURAS DISPONÍVEIS (mm) — cada produto tem sua própria faixa:
-  - Sacola Camiseta: 0,003 / 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,010 / 0,011 / 0,012 / 0,013 / 0,014
+  - Sacola Camiseta: 0,003 / 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,028 / 0,035 / 0,045
   - Sacola Vazada, Saco Impresso Solda Fundo, Saco com Aba: 0,004 / 0,005 / 0,006 / 0,007 / 0,008 / 0,009 / 0,010 / 0,011 / 0,012 / 0,013 / 0,014 / 0,045
 IMPRESSÃO: até 6 cores, frente e/ou verso. Clichê cobrado à parte na primeira compra.
 
@@ -201,12 +201,7 @@ FERRAMENTAS:
 - atualizar_pedido: chame toda vez que aprender QUALQUER dado novo (mesmo parcial, mesmo vários de
   uma vez). É o que mantém sua memória estruturada - mande os itens conhecidos, incluindo os novos dados.
 - consultar_pedido_minimo: opcional, útil pra confirmar o mínimo de um item antes dele estar completo
-  (atualizar_pedido já mostra isso no preview de cada item quando aplicável). O campo espessura é
-  OPCIONAL nesta ferramenta - NUNCA invente uma espessura só para poder chamá-la. Se o cliente ainda
-  não informou a espessura, chame sem esse campo: a ferramenta devolve uma FAIXA de mínimo (mais fino
-  a mais grosso). Nesse caso, apresente ao cliente como uma faixa aproximada (ex: "o mínimo fica entre
-  X e Y mil, dependendo da espessura") e deixe claro que o número exato depende da espessura escolhida -
-  nunca apresente um único número como se fosse definitivo sem saber a espessura de verdade.
+  (atualizar_pedido já mostra isso no preview de cada item quando aplicável).
 - calcular_orcamento: chame para obter o PREÇO OFICIAL FINAL de um item completo, antes de apresentar
   qualquer valor ao cliente como definitivo. Nunca invente ou estime preço por conta própria. Só funciona
   se os dados já estiverem confirmados via atualizar_pedido - não adianta inventar valores aqui.
@@ -352,3 +347,11 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
         if not resultados_tools:
             logger.warning("Loop de ferramentas terminou sem nenhum resultado válido - usando resposta de reserva")
             return "Deixa eu confirmar mais alguns detalhes com a equipe e já te retorno, pode ser?"
+        messages.append({"role": "user", "content": resultados_tools})
+
+    # "not resposta_final" (em vez de só "is None") também cobre o caso da IA
+    # devolver uma resposta em branco/só espaços - antes só o None era pego aqui,
+    # e uma string vazia passava direto, quebrando o salvamento no banco depois.
+    if not resposta_final:
+        resposta_final = "Deixa eu confirmar mais alguns detalhes com a equipe e já te retorno, pode ser?"
+    return resposta_final
