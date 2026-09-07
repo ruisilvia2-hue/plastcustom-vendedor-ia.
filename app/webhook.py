@@ -40,8 +40,11 @@ def webhook():
     # de levantar uma exceção não tratada - "or {}" garante que sempre temos um dict
     # pra chamar .get() com segurança, mesmo com um corpo de requisição hostil/quebrado.
     data = request.get_json(silent=True) or {}
-    telefone_raw = data.get("telefone", "").strip()[:30]  # telefone real nunca passa de ~15 dígitos
-    mensagem = data.get("mensagem", "").strip()[:2000]  # limite defensivo contra payloads abusivos
+    # "or ''" (em vez de só o default do .get) protege contra o campo vir presente
+    # mas com valor null - nesse caso data.get(..., "") ainda devolveria None, e
+    # None.strip() quebrava o webhook inteiro sem resposta nenhuma pro cliente.
+    telefone_raw = (data.get("telefone") or "").strip()[:30]  # telefone real nunca passa de ~15 dígitos
+    mensagem = (data.get("mensagem") or "").strip()[:2000]  # limite defensivo contra payloads abusivos
     if not telefone_raw or not mensagem:
         return jsonify({"erro": "dados incompletos"}), 400
 
@@ -128,6 +131,12 @@ def webhook():
 
         contexto_extra = "\n\n".join(partes_contexto_extra)
         resposta = gerar_resposta(messages, contexto_extra, cliente, conversa)
+        if not resposta:
+            # Rede de segurança: a coluna "conteudo" no banco não aceita valor vazio/nulo.
+            # Sem isso, se gerar_resposta devolvesse "" por qualquer motivo, o INSERT
+            # falhava, o cliente ficava sem resposta, e o erro só aparecia no log.
+            logger.warning("IA devolveu resposta vazia - usando frase de reserva")
+            resposta = "Desculpa, tive um probleminha aqui rapidinho 🙏 Pode repetir sua última mensagem?"
 
         salvar_mensagem(conversa["id"], "ia", resposta)
         lead = calcular_score(conversa["id"], cliente["id"])
