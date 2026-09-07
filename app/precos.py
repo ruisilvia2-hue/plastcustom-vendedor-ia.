@@ -1,51 +1,53 @@
 """
-Tudo relacionado a PREÇO: as tabelas oficiais (carregadas do HTML da calculadora, com
-uma versão de reserva embutida), as regras de tamanho/espessura por produto (validação
-contra os cilindros de impressão disponíveis), e a fórmula de cálculo do orçamento.
+Motor de preços da Plastcustom.
 
-Este módulo é "puro" no sentido de que não acessa banco de dados nem rede - só recebe
-números e devolve números. Isso o deixa fácil de testar isoladamente (veja test_pricing.py).
+Fonte de verdade: lógica da Calculadora Automática enviada pelo proprietário.
+A tabela abaixo mantém os fatores-base do fornecedor (C/N, 23/06/2026) e a
+margem da Plastcustom é aplicada separadamente no cálculo final.
+
+Regra comercial atual da Plastcustom: +25% sobre o preço-base calculado do
+milheiro, seguindo a mesma ordem da Calculadora Automática.
 """
-import re
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.config import (
-    logger, CAMINHO_CALCULADORA,
-    PRODUTOS_VALIDOS, MATERIAIS_VALIDOS,
-)
+from app.config import logger, PRODUTOS_VALIDOS, MATERIAIS_VALIDOS
+
 
 # ============================================================
-# TABELA DE PREÇOS OFICIAL — portada da calculadora HTML da Plastcustom
-# Faixas: v1 = 150-200kg | v2 = 210-400kg | v3 = 410kg ou +
+# CONFIGURAÇÃO COMERCIAL PLASTCUSTOM
 # ============================================================
-# TABELA_PADRAO / PRECOS_PP_PADRAO servem de rede de segurança: são usadas SOMENTE se o
-# arquivo Plastcustom_Orcamento.html não for encontrado ou não puder ser lido. Na operação
-# normal, os valores de verdade vêm direto do arquivo HTML - assim, pra atualizar preços,
-# basta substituir esse arquivo no GitHub e fazer o deploy, sem editar nenhum código Python.
-TABELA_PADRAO = [
-    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 36.66, "v2": 36.01, "v3": 34.71},
-    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 37.83, "v2": 37.31, "v3": 36.01},
-    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 39.13, "v2": 38.48, "v3": 37.31},
-    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 40.95, "v2": 40.30, "v3": 39.78},
+MARGEM_REVENDA_PERCENTUAL = 25.0
 
-    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 39.78, "v2": 39.13, "v3": 37.96},
-    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 40.95, "v2": 40.43, "v3": 39.13},
-    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 42.25, "v2": 41.60, "v3": 40.43},
-    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 44.07, "v2": 43.55, "v3": 42.90},
+# Tabela-base C/N da Calculadora Automática (23/06/2026).
+# NÃO embutir margem nestes fatores. A margem é aplicada em calcular_preco().
+TABELA = [
+    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 28.20, "v2": 27.70, "v3": 26.70},
+    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 29.10, "v2": 28.70, "v3": 27.70},
+    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 30.10, "v2": 29.60, "v3": 28.70},
+    {"m": "Virgem AD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 31.50, "v2": 31.00, "v3": 30.60},
 
-    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 33.15, "v2": 32.50, "v3": 31.20},
-    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 34.58, "v2": 33.80, "v3": 32.50},
-    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 35.23, "v2": 34.58, "v3": 33.15},
-    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 37.18, "v2": 36.53, "v3": 35.88},
+    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 30.60, "v2": 30.10, "v3": 29.20},
+    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 31.50, "v2": 31.10, "v3": 30.10},
+    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 32.50, "v2": 32.00, "v3": 31.10},
+    {"m": "Virgem BD", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 33.90, "v2": 33.50, "v3": 33.00},
 
-    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 26.13, "v2": 26.13, "v3": 26.13},
-    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 27.43, "v2": 27.43, "v3": 27.43},
-    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 28.08, "v2": 28.08, "v3": 28.08},
-    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 30.03, "v2": 30.03, "v3": 30.03},
+    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 25.50, "v2": 25.00, "v3": 24.00},
+    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 26.60, "v2": 26.00, "v3": 25.00},
+    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 27.10, "v2": 26.60, "v3": 25.50},
+    {"m": "Reciclado Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 28.60, "v2": 28.10, "v3": 27.60},
+
+    # A tabela recebida só traz a faixa 150-200 kg para Reciclado Sem Cor.
+    # A Calculadora Automática replica esse valor nas faixas maiores.
+    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE",         "c": "até 2 cores",  "v1": 20.10, "v2": 20.10, "v3": 20.10},
+    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE",         "c": "3 ou + cores", "v1": 21.10, "v2": 21.10, "v3": 21.10},
+    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "até 2 cores",  "v1": 21.60, "v2": 21.60, "v3": 21.60},
+    {"m": "Reciclado Sem Cor", "i": "IMPRESSÃO FRENTE / VERSO", "c": "3 ou + cores", "v1": 23.10, "v2": 23.10, "v3": 23.10},
 ]
 
-PRECOS_PP_PADRAO = {
+# PP permanece exatamente como na Calculadora Automática enviada.
+# A própria calculadora informa que esses valores são placeholders editáveis.
+PRECOS_PP = {
     "com_nf": [
         {"ate": 200,   "frente2": 30.00, "frente3": 31.50, "verso2": 32.00, "verso3": 33.50},
         {"ate": 400,   "frente2": 29.50, "frente3": 31.00, "verso2": 31.50, "verso3": 33.00},
@@ -55,158 +57,32 @@ PRECOS_PP_PADRAO = {
         {"ate": 200,   "frente2": 27.30, "frente3": 28.70, "verso2": 29.12, "verso3": 30.49},
         {"ate": 400,   "frente2": 26.85, "frente3": 28.21, "verso2": 28.67, "verso3": 30.03},
         {"ate": 99999, "frente2": 25.94, "frente3": 27.30, "verso2": 27.76, "verso3": 29.12},
-    ]
+    ],
 }
 
 
-# ============================================================
-# PREÇOS ESPECIAIS VALIDADOS PELO PROPRIETÁRIO
-# ============================================================
-# Use esta tabela SOMENTE para casos comerciais cujo valor foi confirmado manualmente.
-# Ela tem prioridade sobre o fator/kg genérico, mas apenas quando TODOS os campos abaixo
-# coincidem. Assim, uma correção pontual não contamina outras medidas/quantidades.
-PRECO_ESPECIAL_MILHEIRO_VALIDADO = [
-    {
-        "produto": "Sacola Vazada",
-        "material": "Virgem BD",
-        "largura": 30.0,
-        "altura": 45.0,
-        "espessura": 0.008,
-        "cores_n": 2,
-        "impressao": "IMPRESSÃO FRENTE / VERSO",
-        "milheiros": 14.0,
-        "valor_milheiro": 288.00,
-    },
-]
-
-
-def lookup_preco_especial_milheiro(
-    produto: str,
-    material: str,
-    largura: float,
-    altura: float,
-    espessura: float,
-    cores_n: int,
-    imp: str,
-    milheiros: float,
-) -> Optional[float]:
-    """Retorna preço/milheiro apenas para combinações comerciais já validadas.
-
-    Não aproxima quantidade nem troca material. Se não houver correspondência exata,
-    devolve None e o cálculo segue a tabela normal por fator/kg.
-    """
-    for regra in PRECO_ESPECIAL_MILHEIRO_VALIDADO:
-        if (
-            regra["produto"] == produto
-            and regra["material"] == material
-            and abs(regra["largura"] - float(largura)) <= 0.01
-            and abs(regra["altura"] - float(altura)) <= 0.01
-            and abs(regra["espessura"] - float(espessura)) <= 0.0005
-            and regra["cores_n"] == int(cores_n)
-            and regra["impressao"] == imp
-            and abs(regra["milheiros"] - float(milheiros)) <= 1e-9
-        ):
-            return float(regra["valor_milheiro"])
-    return None
-
-
-def carregar_tabela_precos_do_html(caminho: str) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, List[Dict[str, Any]]]]]:
-    """Lê a tabela de fator/kg (TABELA) e a tabela de PP (PRECOS_PP) diretamente do arquivo
-    HTML da calculadora oficial. Se o arquivo não existir ou não puder ser lido, devolve
-    (None, None) e quem chamou usa a tabela padrão como rede de segurança."""
-    try:
-        with open(caminho, encoding="utf-8") as f:
-            texto = f.read()
-    except (FileNotFoundError, OSError):
-        return None, None
-
-    tabela = []
-    m_tabela = re.search(r'TABELA:\s*\[(.*?)\n\s*\],\s*\n\s*MAP_PRECO', texto, re.DOTALL)
-    if m_tabela:
-        linha_regex = re.compile(
-            r"\{\s*m:\s*'([^']+)'\s*,\s*i:\s*'([^']+)'\s*,\s*c:\s*'([^']+)'\s*,"
-            r"\s*v1:\s*([\d.]+)\s*,\s*v2:\s*([\d.]+)\s*,\s*v3:\s*([\d.]+)\s*\}"
-        )
-        for mm in linha_regex.finditer(m_tabela.group(1)):
-            tabela.append({
-                "m": mm.group(1), "i": mm.group(2), "c": mm.group(3),
-                "v1": float(mm.group(4)), "v2": float(mm.group(5)), "v3": float(mm.group(6)),
-            })
-
-    precos_pp = {"com_nf": [], "sem_nf": []}
-    m_pp = re.search(r'PRECOS_PP:\s*\{(.*?)\n\s*\},\s*\n\s*TABELA_ESPECIAL_MILHEIRO', texto, re.DOTALL)
-    if m_pp:
-        for chave in ("com_nf", "sem_nf"):
-            m_chave = re.search(rf'{chave}:\s*\[(.*?)\]', m_pp.group(1), re.DOTALL)
-            if m_chave:
-                linha_regex_pp = re.compile(
-                    r"\{\s*ate:\s*(\d+)\s*,\s*frente2:\s*([\d.]+)\s*,\s*frente3:\s*([\d.]+)\s*,"
-                    r"\s*verso2:\s*([\d.]+)\s*,\s*verso3:\s*([\d.]+)\s*\}"
-                )
-                for mm in linha_regex_pp.finditer(m_chave.group(1)):
-                    precos_pp[chave].append({
-                        "ate": int(mm.group(1)), "frente2": float(mm.group(2)), "frente3": float(mm.group(3)),
-                        "verso2": float(mm.group(4)), "verso3": float(mm.group(5)),
-                    })
-
-    # Só considera válido se extraiu uma quantidade razoável de linhas - evita usar
-    # uma tabela vazia/quebrada por causa de um arquivo corrompido ou formatado diferente.
-    if len(tabela) < 10 or len(precos_pp["com_nf"]) < 1:
-        return None, None
-    return tabela, precos_pp
-
-
-_tabela_carregada, _precos_pp_carregados = carregar_tabela_precos_do_html(CAMINHO_CALCULADORA)
-if _tabela_carregada:
-    TABELA = _tabela_carregada
-    PRECOS_PP = _precos_pp_carregados
-    logger.info(f"Tabela de preços carregada de {CAMINHO_CALCULADORA} ({len(TABELA)} linhas)")
-else:
-    TABELA = TABELA_PADRAO
-    PRECOS_PP = PRECOS_PP_PADRAO
-    logger.warning(f"Não encontrou/não conseguiu ler {CAMINHO_CALCULADORA} - usando tabela de preços padrão embutida no código")
-
-
 def recarregar_tabela_precos() -> Dict[str, Any]:
-    """Relê o arquivo Plastcustom_Orcamento.html do disco agora mesmo e atualiza TABELA
-    e PRECOS_PP em tempo real - sem precisar reiniciar o serviço. Usa 'global' de
-    propósito: como lookup_fator_kg/lookup_pp leem TABELA/PRECOS_PP pelo nome do módulo
-    a cada chamada (não guardam uma cópia local), essa troca já vale pra próxima
-    mensagem processada, em qualquer parte do sistema.
-    Se o arquivo novo não existir ou vier corrompido/vazio, NÃO mexe nos valores atuais
-    (o robô continua usando a última tabela válida que tinha, em vez de quebrar)."""
-    global TABELA, PRECOS_PP
+    """Compatibilidade com a rota de manutenção existente.
 
-    nova_tabela, novos_precos_pp = carregar_tabela_precos_do_html(CAMINHO_CALCULADORA)
-    if not nova_tabela:
-        logger.warning(
-            "Falha ao recarregar tabela de preços - mantendo valores atuais",
-            extra={"evento": "precos_recarregar_falhou", "caminho": CAMINHO_CALCULADORA},
-        )
-        return {
-            "sucesso": False,
-            "erro": f"Não foi possível ler/validar {CAMINHO_CALCULADORA} (arquivo ausente ou formato inesperado)",
-            "linhas_tabela_atual": len(TABELA),
-        }
-
-    linhas_antes = len(TABELA)
-    TABELA = nova_tabela
-    PRECOS_PP = novos_precos_pp
+    A partir desta versão, preço não é mais carregado de HTML em runtime. Isso elimina
+    divergência entre Python e arquivos HTML antigos. Para mudar fatores ou margem,
+    altere este módulo e faça novo deploy.
+    """
     logger.info(
-        "Tabela de preços recarregada em tempo real",
+        "Tabela de preços interna ativa",
         extra={
-            "evento": "precos_recarregados",
-            "linhas_antes": linhas_antes,
-            "linhas_depois": len(TABELA),
-            "linhas_pp_com_nf": len(PRECOS_PP["com_nf"]),
-            "linhas_pp_sem_nf": len(PRECOS_PP["sem_nf"]),
+            "evento": "precos_tabela_interna",
+            "linhas_tabela": len(TABELA),
+            "margem_percentual": MARGEM_REVENDA_PERCENTUAL,
         },
     )
     return {
         "sucesso": True,
+        "fonte": "calculadora_automatica_embutida",
         "linhas_tabela": len(TABELA),
         "linhas_pp_com_nf": len(PRECOS_PP["com_nf"]),
         "linhas_pp_sem_nf": len(PRECOS_PP["sem_nf"]),
+        "margem_percentual": MARGEM_REVENDA_PERCENTUAL,
     }
 
 
@@ -386,14 +262,29 @@ def calcular_preco(
     milheiros: float,
     espessura: float = 0.028,
     tipo_nota: str = "com_nf",
+    acrescimo_percentual: float = MARGEM_REVENDA_PERCENTUAL,
+    fita_extra_mil: float = 0.0,
 ) -> Dict[str, Any]:
-    """Calcula o preço EXATO seguindo a mesma lógica da calculadora oficial da Plastcustom.
-    Não inclui clichê (cobrado à parte, conforme já informado pelo robô ao cliente)."""
+    """Calcula preço seguindo a ordem da Calculadora Automática.
+
+    Ordem reproduzida:
+      1) peso do milheiro = largura * altura * espessura
+      2) total kg = peso do milheiro * milheiros
+      3) busca fator pela faixa de peso/material/impressão/cores
+      4) sem impressão (exceto PP): -R$2,00 no fator
+      5) milheiro abaixo de 1,5 kg: +R$3,00 no fator
+      6) aplica +25% (ou acrescimo_percentual informado) sobre a base do milheiro
+      7) soma fita_extra_mil, quando houver
+
+    Clichê continua fora deste cálculo, como no fluxo atual do vendedor.
+    """
     L = float(largura)
     A = float(altura)
     E = float(espessura)
     MILH = float(milheiros)
     cores_n = int(cores_n)
+    ADD = float(acrescimo_percentual)
+    fita_extra_mil = float(fita_extra_mil)
 
     if produto not in PRODUTOS_VALIDOS:
         raise ValueError(f"Produto inválido: {produto}")
@@ -401,61 +292,62 @@ def calcular_preco(
         raise ValueError(f"Material inválido ou não informado: {material}")
     if imp not in ("IMPRESSÃO FRENTE", "IMPRESSÃO FRENTE / VERSO"):
         raise ValueError(f"Tipo de impressão inválido ou não informado: {imp}")
+    if L <= 0 or A <= 0 or E <= 0 or MILH <= 0:
+        raise ValueError("Largura, altura, espessura e quantidade devem ser maiores que zero")
 
     area = L * A
     vol = area * E
-    p_un_g = vol            # peso por unidade (g) — mesma fórmula da calculadora
-    p_mil_kg = p_un_g       # "peso do milheiro" no sentido usado pela calculadora
+    p_un_g = vol
+    p_mil_kg = p_un_g
     total_kg = p_mil_kg * MILH
 
     cores_faixa = "até 2 cores" if cores_n <= 2 else "3 ou + cores"
+    preco_kg_tabela = lookup_fator_kg(material, imp, cores_faixa, total_kg, tipo_nota)
 
-    preco_especial = lookup_preco_especial_milheiro(
-        produto=produto, material=material, largura=L, altura=A, espessura=E,
-        cores_n=cores_n, imp=imp, milheiros=MILH,
-    )
+    if preco_kg_tabela <= 0:
+        raise ValueError(f"Combinação sem preço na tabela: {material} / {imp} / {cores_faixa}")
 
-    if preco_especial is not None:
-        # Caso comercial validado: usa o preço/milheiro confirmado, sem inferir novo fator
-        # para outras combinações. O preco_kg abaixo é apenas informativo/derivado.
-        mil_base = preco_especial
-        preco_kg = (mil_base / p_mil_kg) if p_mil_kg > 0 else 0
-        adicional_fator_kg = 0
-        adicional_mil = 0
-    else:
-        preco_kg = lookup_fator_kg(material, imp, cores_faixa, total_kg, tipo_nota)
+    # Mesma regra da calculadora: sem impressão reduz R$2,00 no fator, exceto PP.
+    preco_kg_auto = preco_kg_tabela
+    if cores_n == 0 and material != "Polipropileno (PP)":
+        preco_kg_auto -= 2.0
 
-        if preco_kg <= 0:
-            raise ValueError(f"Combinação sem preço na tabela: {material} / {imp} / {cores_faixa}")
+    mil_base = preco_kg_auto * p_mil_kg
 
-        # Sem impressão: desconto de R$2 no fator kg (regra da calculadora), exceto PP
-        if cores_n == 0 and material != "Polipropileno (PP)":
-            preco_kg -= 2
+    # A implementação real da calculadora usa +R$3,00 quando o milheiro pesa <1,5 kg.
+    adicional_fator_kg = 3.0 if 0 < p_mil_kg < 1.5 else 0.0
+    adicional_mil_baixo_peso = adicional_fator_kg * p_mil_kg
+    mil_base_com_baixo_peso = mil_base + adicional_mil_baixo_peso
 
-        mil_base = preco_kg * p_mil_kg
+    # Mesma ordem da calculadora: o percentual incide sobre a base antes da fita.
+    multiplicador = 1.0 + (ADD / 100.0)
+    milheiro_sem_fita = mil_base_com_baixo_peso * multiplicador
+    milheiro = milheiro_sem_fita + fita_extra_mil
 
-        # Regra: milheiro < 1,5kg soma R$3,00 no fator kg
-        adicional_fator_kg = 3 if 0 < p_mil_kg < 1.5 else 0
-        adicional_mil = adicional_fator_kg * p_mil_kg
-
-    mil = mil_base + adicional_mil
-    unitario = mil / 1000
-    total = mil * MILH
+    unitario = milheiro / 1000.0
+    total = milheiro * MILH
+    fator_kg_final = total_kg and ((milheiro * MILH) / total_kg) or 0.0
 
     pedido_min_kg = 100 if cores_n == 0 else 150
     minimo = calcular_pedido_minimo(L, A, E, cores_n)
 
     return {
-        "preco_kg": round(preco_kg, 2),
+        "preco_kg_tabela": round(preco_kg_tabela, 2),
+        "preco_kg": round(preco_kg_auto, 2),
+        "fator_kg_final": round(fator_kg_final, 4),
+        "margem_percentual": round(ADD, 2),
         "unitario": round(unitario, 4),
-        "milheiro": round(mil, 2),
+        "milheiro": round(milheiro, 2),
         "total": round(total, 2),
+        "peso_milheiro_kg": round(p_mil_kg, 4),
         "peso_total_kg": round(total_kg, 2),
         "espessura_usada": round(E, 3),
+        "adicional_fator_baixo_peso": round(adicional_fator_kg, 2),
+        "fita_extra_mil": round(fita_extra_mil, 2),
         "pedido_minimo_kg": pedido_min_kg,
         "pedido_minimo_milheiros": minimo["milheiros_min"] if minimo else None,
         "atende_minimo": total_kg >= pedido_min_kg,
-        "preco_especial_aplicado": preco_especial is not None,
+        "preco_especial_aplicado": False,
     }
 
 
