@@ -15,8 +15,9 @@ from app.database import (
     buscar_ou_criar_cliente, buscar_ou_criar_conversa, verificar_mensagem_duplicada,
     salvar_mensagem, obter_historico, obter_estado_pedido, calcular_score,
     limpar_dados_antigos, existe_mensagem_cliente_mais_nova, verificar_conexao_db,
+    buscar_conversas_para_reengajar,
 )
-from app.whatsapp import notificar_proprietario
+from app.whatsapp import notificar_proprietario, reengajar_cliente
 from app.ia import gerar_resposta, SYSTEM_PROMPT
 from app.precos import recarregar_tabela_precos
 
@@ -201,6 +202,42 @@ def admin_recarregar_precos():
         )
         # Idem: não devolve str(e) pra fora, só um erro genérico + log detalhado internamente.
         return jsonify({"sucesso": False, "erro": "Não foi possível recarregar os preços agora. Verifique os logs do serviço."}), 500
+
+
+@bp.route("/admin/reengajar-conversas", methods=["POST"])
+@limiter.limit("30 per hour")  # chamado periodicamente por um agendador (ex: n8n a cada 30-60min)
+def admin_reengajar_conversas():
+    """Encontra conversas onde o robô falou por último e o cliente sumiu (silêncio entre
+    horas_min e horas_max horas) e manda UMA única mensagem curta de retomada por conversa
+    - nunca insiste duas vezes. Pensado pra ser chamado periodicamente por um agendador
+    externo (ex: n8n Schedule Trigger a cada 30-60 minutos), não pelo n8n do webhook normal.
+    Por padrão roda em modo de TESTE (não manda nada) - só manda de verdade se o corpo da
+    requisição incluir {"modo": "executar"}."""
+    if request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
+        return jsonify({"erro": "não autorizado"}), 401
+    data = request.get_json(silent=True) or {}
+    horas_min = data.get("horas_min", 3)
+    horas_max = data.get("horas_max", 24)
+    modo_teste = data.get("modo") != "executar"
+    try:
+        alvos = buscar_conversas_para_reengajar(horas_min, horas_max)
+        if modo_teste:
+            return jsonify({
+                "modo": "teste",
+                "conversas_que_receberiam_reengajamento": len(alvos),
+                "telefones": [a["telefone"] for a in alvos],
+            })
+        enviados = 0
+        for alvo in alvos:
+            if reengajar_cliente(alvo["telefone"], alvo.get("nome"), alvo["conversa_id"], alvo["cliente_id"]):
+                enviados += 1
+        return jsonify({"modo": "executado", "conversas_reengajadas": enviados, "total_candidatas": len(alvos)})
+    except Exception as e:
+        logger.error(
+            "Erro ao reengajar conversas",
+            extra={"evento": "erro_reengajamento", "erro": str(e)},
+        )
+        return jsonify({"erro": "Não foi possível concluir o reengajamento agora. Verifique os logs do serviço."}), 500
 
 
 @bp.route("/health", methods=["GET"])
