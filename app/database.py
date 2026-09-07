@@ -197,6 +197,36 @@ def obter_historico(conversa_id: str) -> List[Dict[str, Any]]:
     return msgs
 
 
+def buscar_conversas_para_reengajar(horas_min: float = 3, horas_max: float = 24) -> List[Dict[str, Any]]:
+    """Encontra conversas 'esfriando': o robô foi quem falou por último, o cliente não
+    respondeu desde então, já passou entre horas_min e horas_max horas de silêncio, a
+    conversa ainda está ativa (não fechada/concluída), e ELA AINDA NÃO recebeu nenhum
+    reengajamento antes (ver notificacoes.tipo='reengajamento' - garante no máximo UMA
+    mensagem de retomada por conversa, nunca insiste/spamma o cliente)."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute("""
+        SELECT c.id AS conversa_id, c.cliente_id, cl.telefone, cl.nome
+        FROM conversas c
+        JOIN clientes cl ON cl.id = c.cliente_id
+        WHERE c.status = 'ativa'
+          AND c.ultima_mensagem BETWEEN NOW() - (%s || ' hours')::INTERVAL
+                                     AND NOW() - (%s || ' hours')::INTERVAL
+          AND (
+                SELECT m.remetente FROM mensagens m
+                WHERE m.conversa_id = c.id
+                ORDER BY m.timestamp DESC LIMIT 1
+              ) = 'ia'
+          AND NOT EXISTS (
+                SELECT 1 FROM notificacoes n
+                WHERE n.conversa_id = c.id AND n.tipo = 'reengajamento'
+              )
+    """, (horas_max, horas_min))
+    resultado = [dict(r) for r in cur.fetchall()]
+    cur.close(); release_db(db)
+    return resultado
+
+
 def calcular_score(conversa_id: str, cliente_id: str) -> Dict[str, Any]:
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
