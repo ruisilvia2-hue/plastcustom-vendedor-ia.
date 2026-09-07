@@ -59,6 +59,57 @@ PRECOS_PP_PADRAO = {
 }
 
 
+# ============================================================
+# PREÇOS ESPECIAIS VALIDADOS PELO PROPRIETÁRIO
+# ============================================================
+# Use esta tabela SOMENTE para casos comerciais cujo valor foi confirmado manualmente.
+# Ela tem prioridade sobre o fator/kg genérico, mas apenas quando TODOS os campos abaixo
+# coincidem. Assim, uma correção pontual não contamina outras medidas/quantidades.
+PRECO_ESPECIAL_MILHEIRO_VALIDADO = [
+    {
+        "produto": "Sacola Vazada",
+        "material": "Virgem BD",
+        "largura": 30.0,
+        "altura": 45.0,
+        "espessura": 0.008,
+        "cores_n": 2,
+        "impressao": "IMPRESSÃO FRENTE / VERSO",
+        "milheiros": 14.0,
+        "valor_milheiro": 288.00,
+    },
+]
+
+
+def lookup_preco_especial_milheiro(
+    produto: str,
+    material: str,
+    largura: float,
+    altura: float,
+    espessura: float,
+    cores_n: int,
+    imp: str,
+    milheiros: float,
+) -> Optional[float]:
+    """Retorna preço/milheiro apenas para combinações comerciais já validadas.
+
+    Não aproxima quantidade nem troca material. Se não houver correspondência exata,
+    devolve None e o cálculo segue a tabela normal por fator/kg.
+    """
+    for regra in PRECO_ESPECIAL_MILHEIRO_VALIDADO:
+        if (
+            regra["produto"] == produto
+            and regra["material"] == material
+            and abs(regra["largura"] - float(largura)) <= 0.01
+            and abs(regra["altura"] - float(altura)) <= 0.01
+            and abs(regra["espessura"] - float(espessura)) <= 0.0005
+            and regra["cores_n"] == int(cores_n)
+            and regra["impressao"] == imp
+            and abs(regra["milheiros"] - float(milheiros)) <= 1e-9
+        ):
+            return float(regra["valor_milheiro"])
+    return None
+
+
 def carregar_tabela_precos_do_html(caminho: str) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, List[Dict[str, Any]]]]]:
     """Lê a tabela de fator/kg (TABELA) e a tabela de PP (PRECOS_PP) diretamente do arquivo
     HTML da calculadora oficial. Se o arquivo não existir ou não puder ser lido, devolve
@@ -344,6 +395,13 @@ def calcular_preco(
     MILH = float(milheiros)
     cores_n = int(cores_n)
 
+    if produto not in PRODUTOS_VALIDOS:
+        raise ValueError(f"Produto inválido: {produto}")
+    if material not in MATERIAIS_VALIDOS:
+        raise ValueError(f"Material inválido ou não informado: {material}")
+    if imp not in ("IMPRESSÃO FRENTE", "IMPRESSÃO FRENTE / VERSO"):
+        raise ValueError(f"Tipo de impressão inválido ou não informado: {imp}")
+
     area = L * A
     vol = area * E
     p_un_g = vol            # peso por unidade (g) — mesma fórmula da calculadora
@@ -351,20 +409,34 @@ def calcular_preco(
     total_kg = p_mil_kg * MILH
 
     cores_faixa = "até 2 cores" if cores_n <= 2 else "3 ou + cores"
-    preco_kg = lookup_fator_kg(material, imp, cores_faixa, total_kg, tipo_nota)
 
-    if preco_kg <= 0:
-        raise ValueError(f"Combinação sem preço na tabela: {material} / {imp} / {cores_faixa}")
+    preco_especial = lookup_preco_especial_milheiro(
+        produto=produto, material=material, largura=L, altura=A, espessura=E,
+        cores_n=cores_n, imp=imp, milheiros=MILH,
+    )
 
-    # Sem impressão: desconto de R$2 no fator kg (regra da calculadora), exceto PP
-    if cores_n == 0 and material != "Polipropileno (PP)":
-        preco_kg -= 2
+    if preco_especial is not None:
+        # Caso comercial validado: usa o preço/milheiro confirmado, sem inferir novo fator
+        # para outras combinações. O preco_kg abaixo é apenas informativo/derivado.
+        mil_base = preco_especial
+        preco_kg = (mil_base / p_mil_kg) if p_mil_kg > 0 else 0
+        adicional_fator_kg = 0
+        adicional_mil = 0
+    else:
+        preco_kg = lookup_fator_kg(material, imp, cores_faixa, total_kg, tipo_nota)
 
-    mil_base = preco_kg * p_mil_kg
+        if preco_kg <= 0:
+            raise ValueError(f"Combinação sem preço na tabela: {material} / {imp} / {cores_faixa}")
 
-    # Regra: milheiro < 1,5kg soma R$3,00 no fator kg
-    adicional_fator_kg = 3 if 0 < p_mil_kg < 1.5 else 0
-    adicional_mil = adicional_fator_kg * p_mil_kg
+        # Sem impressão: desconto de R$2 no fator kg (regra da calculadora), exceto PP
+        if cores_n == 0 and material != "Polipropileno (PP)":
+            preco_kg -= 2
+
+        mil_base = preco_kg * p_mil_kg
+
+        # Regra: milheiro < 1,5kg soma R$3,00 no fator kg
+        adicional_fator_kg = 3 if 0 < p_mil_kg < 1.5 else 0
+        adicional_mil = adicional_fator_kg * p_mil_kg
 
     mil = mil_base + adicional_mil
     unitario = mil / 1000
@@ -383,10 +455,14 @@ def calcular_preco(
         "pedido_minimo_kg": pedido_min_kg,
         "pedido_minimo_milheiros": minimo["milheiros_min"] if minimo else None,
         "atende_minimo": total_kg >= pedido_min_kg,
+        "preco_especial_aplicado": preco_especial is not None,
     }
 
 
-CAMPOS_OBRIGATORIOS_ITEM = ["produto", "largura", "altura", "espessura", "cores_n", "impressao", "milheiros"]
+CAMPOS_OBRIGATORIOS_ITEM = [
+    "produto", "material", "largura", "altura", "espessura",
+    "cores_n", "impressao", "milheiros",
+]
 
 
 def processar_item_pedido(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -438,7 +514,10 @@ def processar_item_pedido(item: Dict[str, Any]) -> Dict[str, Any]:
     if completo:
         try:
             imp_map = "IMPRESSÃO FRENTE / VERSO" if impressao == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
-            calc = calcular_preco(produto, material or "Virgem BD", largura, altura, int(cores_n), imp_map, milheiros, espessura=espessura)
+            calc = calcular_preco(
+                produto, material, largura, altura, int(cores_n), imp_map,
+                milheiros, espessura=espessura
+            )
             preco_preview = {
                 "preco_por_milheiro": calc["milheiro"], "preco_total": calc["total"],
                 "atende_minimo": calc["atende_minimo"], "pedido_minimo_milheiros": calc["pedido_minimo_milheiros"],
