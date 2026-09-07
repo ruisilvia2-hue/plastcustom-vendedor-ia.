@@ -46,8 +46,29 @@ def webhook():
     # None.strip() quebrava o webhook inteiro sem resposta nenhuma pro cliente.
     telefone_raw = (data.get("telefone") or "").strip()[:30]  # telefone real nunca passa de ~15 dígitos
     mensagem = (data.get("mensagem") or "").strip()[:2000]  # limite defensivo contra payloads abusivos
-    if not telefone_raw or not mensagem:
+    if not telefone_raw:
         return jsonify({"erro": "dados incompletos"}), 400
+
+    if not mensagem:
+        # O cliente mandou algo que não é texto puro (áudio, imagem, figurinha, documento,
+        # etc.) - hoje ainda não sabemos processar esses formatos, e o n8n manda o campo
+        # "mensagem" vazio nesses casos. ANTES: isso batia no "if not mensagem" acima e
+        # devolvia erro 400 - o cliente ficava em silêncio total, sem entender por quê.
+        # AGORA: avisamos e pedimos pra escrever em texto, e registramos no histórico.
+        try:
+            cliente = buscar_ou_criar_cliente(telefone_raw)
+            conversa = buscar_ou_criar_conversa(cliente["id"])
+            correlation_id_var.set(str(conversa["id"])[:8])
+            salvar_mensagem(conversa["id"], "cliente", "[cliente enviou uma mídia - áudio, imagem, figurinha ou documento]")
+            resposta = "Recebi algo aqui, mas ainda não consigo ouvir áudio nem ver imagem/figurinha 🙏 Pode me escrever em texto o que você precisa?"
+            salvar_mensagem(conversa["id"], "ia", resposta)
+            return jsonify({"ok": True, "resposta": resposta})
+        except Exception as e:
+            logger.error(f"Erro ao tratar mensagem não-textual: {e}")
+            return jsonify({
+                "ok": False,
+                "resposta": "Recebi algo aqui, mas ainda não consigo ouvir áudio nem ver imagem/figurinha 🙏 Pode me escrever em texto o que você precisa?",
+            }), 200
 
     try:
         cliente = buscar_ou_criar_cliente(telefone_raw)
