@@ -128,8 +128,13 @@ def executar_consultar_pedido_minimo(entrada: Dict[str, Any]) -> Dict[str, Any]:
         return {"erro": "Não foi possível calcular o mínimo para esses dados. Peça para o cliente confirmar produto, tamanho e espessura novamente."}
 
 
-CAMPOS_OBRIGATORIOS_ORCAMENTO = ["produto", "largura", "altura", "espessura", "cores_n", "milheiros"]
-CAMPOS_CRITICOS_ORCAMENTO = ["espessura", "cores_n", "impressao", "milheiros"]
+CAMPOS_OBRIGATORIOS_ORCAMENTO = [
+    "produto", "material", "largura", "altura", "espessura",
+    "cores_n", "impressao", "milheiros",
+]
+CAMPOS_CRITICOS_ORCAMENTO = [
+    "material", "espessura", "cores_n", "impressao", "milheiros",
+]
 
 
 def executar_calcular_orcamento(conversa_id: str, entrada: Dict[str, Any]) -> Dict[str, Any]:
@@ -222,13 +227,25 @@ def executar_calcular_orcamento(conversa_id: str, entrada: Dict[str, Any]) -> Di
             "mensagem": "Algum dos números do pedido (tamanho, espessura, cores ou quantidade) não ficou claro. Confirme esses valores com o cliente.",
         }
 
-    material = entrada.get("material") or "Virgem BD"
+    material = entrada.get("material")
     if material not in MATERIAIS_VALIDOS:
-        material = "Virgem BD"
+        return {
+            "erro": "valor_invalido",
+            "mensagem": "O material ainda não foi confirmado. Pergunte ao cliente qual material deseja antes de calcular o preço.",
+            "campos_faltando": ["material"],
+        }
+
     cor_produto = entrada.get("cor_produto") or "Transparente"
     if cor_produto not in CORES_PRODUTO_VALIDAS:
         cor_produto = "Transparente"
-    impressao = entrada.get("impressao") or "FRENTE"
+
+    impressao = entrada.get("impressao")
+    if impressao not in ("FRENTE", "FRENTE_VERSO"):
+        return {
+            "erro": "valor_invalido",
+            "mensagem": "O tipo de impressão ainda não foi confirmado. Pergunte se é só frente ou frente e verso antes de calcular o preço.",
+            "campos_faltando": ["impressao"],
+        }
     imp_map = "IMPRESSÃO FRENTE / VERSO" if impressao == "FRENTE_VERSO" else "IMPRESSÃO FRENTE"
 
     largura, altura, ajustes = ajustar_tamanho(produto, largura, altura, cores_n)
@@ -287,6 +304,7 @@ def executar_calcular_orcamento(conversa_id: str, entrada: Dict[str, Any]) -> Di
         "preco_por_milheiro": calc["milheiro"],
         "preco_total": calc["total"],
         "peso_total_kg": calc["peso_total_kg"],
+        "preco_especial_aplicado": calc.get("preco_especial_aplicado", False),
     }
 
 
@@ -342,7 +360,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "produto": {"type": "string", "enum": PRODUTOS_VALIDOS},
-                "material": {"type": "string", "enum": MATERIAIS_VALIDOS, "description": "usa 'Virgem BD' se o cliente não especificou"},
+                "material": {"type": "string", "enum": MATERIAIS_VALIDOS, "description": "material confirmado explicitamente pelo cliente; nunca invente ou assuma um material"},
                 "cor_produto": {"type": "string", "enum": CORES_PRODUTO_VALIDAS, "description": "cor da sacola em si (não afeta o preço, é só informativo). Use 'Transparente' se o cliente não especificou."},
                 "largura": {"type": "number", "description": "largura em cm"},
                 "altura": {"type": "number", "description": "altura em cm"},
