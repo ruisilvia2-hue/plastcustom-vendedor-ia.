@@ -7,12 +7,13 @@ NÃO envia a resposta ao CLIENTE - isso é feito pelo n8n (ver README do projeto
 evitando mandar a mesma mensagem duas vezes.
 """
 import time
+from typing import Optional
 
 import requests
 from psycopg2.extras import RealDictCursor
 
 from app.config import logger, EVOLUTION_URL, EVOLUTION_KEY, PROPRIETARIO, CONSULTOR_TELEFONE
-from app.database import get_db, release_db
+from app.database import get_db, release_db, salvar_mensagem
 
 # Códigos de status que valem a pena tentar de novo (erro do lado do servidor,
 # ou "muitas requisições" - provavelmente vai passar sozinho em alguns segundos).
@@ -72,6 +73,40 @@ def enviar_whatsapp(telefone, mensagem, instance="automacao", tentativas=3):
             )
             return False
     return False
+
+
+def reengajar_cliente(telefone: str, nome: Optional[str], conversa_id: str, cliente_id: str) -> bool:
+    """Manda UMA mensagem curta de retomada pra um cliente que sumiu no meio da conversa
+    (chamado pelo endpoint /admin/reengajar-conversas). A checagem de 'já reengajou antes'
+    já foi feita em buscar_conversas_para_reengajar - aqui só confirmamos de novo por
+    segurança (evita duplicar caso a função seja chamada duas vezes muito perto uma da
+    outra) antes de mandar e registrar."""
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "SELECT id FROM notificacoes WHERE conversa_id=%s AND tipo='reengajamento'",
+        (conversa_id,)
+    )
+    if cur.fetchone():
+        cur.close(); release_db(db)
+        return False
+
+    primeiro_nome = nome.split(" ")[0] if nome else None
+    saudacao = f"Oi, {primeiro_nome}! " if primeiro_nome else "Oi! "
+    msg = saudacao + "Passando pra saber se ainda tá por aí 😊 Fico à disposição pra fechar seu orçamento quando quiser, é só me chamar!"
+
+    ok = enviar_whatsapp(telefone, msg)
+    if ok:
+        cur.execute(
+            "INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'reengajamento')",
+            (cliente_id, conversa_id)
+        )
+        db.commit()
+        # Registra a mensagem no histórico da conversa - assim, quando o cliente responder,
+        # a IA já vê no contexto que foi ELA quem retomou o contato, e conduz naturalmente.
+        salvar_mensagem(conversa_id, "ia", msg)
+    cur.close(); release_db(db)
+    return ok
 
 
 def notificar_proprietario(cliente, score, conversa_id):
