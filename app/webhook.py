@@ -20,6 +20,7 @@ from app.database import (
 from app.whatsapp import notificar_proprietario, reengajar_cliente
 from app.ia import gerar_resposta, SYSTEM_PROMPT
 from app.precos import recarregar_tabela_precos
+from app.antibot import verificar_antibot
 
 bp = Blueprint("webhook", __name__)
 
@@ -87,6 +88,34 @@ def webhook():
         if resposta_duplicada is not None:
             logger.warning(f"Mensagem duplicada detectada (id={mensagem_id}) - devolvendo resposta anterior sem reprocessar")
             return jsonify({"ok": True, "resposta": resposta_duplicada, "duplicado": True})
+
+        # ================================================================
+        # ANTI-BOT / CIRCUIT BREAKER COM REDIS
+        # ================================================================
+        # Esta verificação acontece ANTES de salvar a mensagem no histórico e,
+        # principalmente, ANTES de chamar a IA. Assim um robô externo pode até
+        # continuar disparando mensagens para o webhook, mas não consegue gerar
+        # centenas de chamadas à IA nem criar um loop caro de respostas.
+        protecao_antibot = verificar_antibot(telefone_raw, mensagem)
+        if not protecao_antibot.get("allow_ai", False):
+            logger.warning(
+                "Mensagem barrada pelo Anti-Bot",
+                extra={
+                    "evento": "antibot_bloqueio",
+                    "telefone": telefone_raw,
+                    "motivo": protecao_antibot.get("motivo"),
+                    "retry_after_seconds": protecao_antibot.get("retry_after_seconds", 0),
+                    "counters": protecao_antibot.get("counters", {}),
+                },
+            )
+            # IMPORTANTE: resposta vazia é intencional. O n8n deve verificar
+            # bloqueado_antibot antes do node que envia mensagem pela Evolution.
+            return jsonify({
+                "ok": True,
+                "resposta": "",
+                "bloqueado_antibot": True,
+                "retry_after_seconds": protecao_antibot.get("retry_after_seconds", 0),
+            }), 200
 
         timestamp_minha_mensagem = salvar_mensagem(conversa["id"], "cliente", mensagem)
 
