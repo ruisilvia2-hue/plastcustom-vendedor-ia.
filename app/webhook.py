@@ -15,7 +15,7 @@ from app.database import (
     buscar_ou_criar_cliente, buscar_ou_criar_conversa, verificar_mensagem_duplicada,
     salvar_mensagem, obter_historico, obter_estado_pedido, calcular_score,
     limpar_dados_antigos, existe_mensagem_cliente_mais_nova, verificar_conexao_db,
-    buscar_conversas_para_reengajar, bot_esta_pausado,
+    buscar_conversas_para_reengajar, bot_esta_pausado, retomar_bot_por_telefone,
 )
 from app.whatsapp import notificar_proprietario, reengajar_cliente
 from app.ia import gerar_resposta, SYSTEM_PROMPT
@@ -257,6 +257,33 @@ def manutencao_limpeza():
             extra={"evento": "erro_limpeza_dados", "erro": str(e)},
         )
         return jsonify({"erro": "Não foi possível concluir a limpeza agora. Verifique os logs do serviço."}), 500
+
+
+@bp.route("/admin/retomar-bot", methods=["POST"])
+@limiter.limit("30 per hour")
+def admin_retomar_bot():
+    """Retoma o atendimento automático de um cliente pelo telefone.
+
+    Endpoint administrativo protegido pelo mesmo X-Webhook-Secret já usado
+    nas outras rotas internas. Não envia mensagem ao cliente; apenas libera
+    a conversa para que a próxima mensagem volte a ser atendida pela IA.
+    """
+    if request.headers.get("X-Webhook-Secret") != WEBHOOK_SECRET:
+        return jsonify({"erro": "não autorizado"}), 401
+
+    data = request.get_json(silent=True) or {}
+    telefone = (data.get("telefone") or "").strip()[:30]
+
+    if not telefone:
+        return jsonify({
+            "ok": False,
+            "retomado": False,
+            "erro": "telefone obrigatório",
+        }), 400
+
+    resultado = retomar_bot_por_telefone(telefone)
+    status = 200 if resultado.get("ok") else 500
+    return jsonify(resultado), status
 
 
 @bp.route("/admin/recarregar-precos", methods=["POST"])
