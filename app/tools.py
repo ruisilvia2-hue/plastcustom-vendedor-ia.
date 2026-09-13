@@ -1,13 +1,14 @@
 """
 As ferramentas (tool use) que a IA pode chamar durante a conversa: atualizar a memória
 estruturada do pedido, consultar o mínimo, calcular o orçamento oficial, fechar o
-pedido, transferir para um consultor humano, e tratar pedidos de privacidade (LGPD).
+pedido, atualizar o funil comercial, transferir para um consultor humano, e tratar pedidos de privacidade (LGPD).
 
 Cada "executar_..." é a função Python de verdade que roda quando a IA chama a
 ferramenta correspondente. As notificações (fechar_pedido, transferir_para_consultor,
 solicitar_privacidade) são disparadas de dentro do loop de ferramentas em app/ia.py,
 não aqui - este módulo cuida só do cálculo/validação dos dados do pedido.
 """
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 from app.config import logger, PRODUTOS_VALIDOS, MATERIAIS_VALIDOS, CORES_PRODUTO_VALIDAS
@@ -15,7 +16,14 @@ from app.precos import (
     ajustar_tamanho, espessura_mais_proxima, calcular_preco, calcular_pedido_minimo,
     processar_item_pedido, ESPESSURAS_POR_PRODUTO,
 )
-from app.database import salvar_estado_pedido, obter_estado_pedido
+from app.database import (
+    salvar_estado_pedido,
+    obter_estado_pedido,
+    atualizar_etapa_funil,
+    agendar_followup,
+    cancelar_followup,
+    obter_estado_comercial,
+)
 
 
 def executar_atualizar_pedido(conversa_id: str, entrada: Dict[str, Any]) -> Dict[str, Any]:
@@ -308,6 +316,120 @@ def executar_calcular_orcamento(conversa_id: str, entrada: Dict[str, Any]) -> Di
     }
 
 
+ETAPAS_FUNIL_IA = {
+    "novo",
+    "qualificacao",
+    "orcamento",
+    "negociacao",
+    "fechamento",
+    "perdido",
+}
+
+
+def executar_atualizar_funil_comercial(conversa_id: str, entrada: Dict[str, Any]) -> Dict[str, Any]:
+    """Registra a etapa comercial atual e, opcionalmente, agenda/cancela um follow-up.
+
+    IMPORTANTE:
+    - esta função NÃO envia mensagem de follow-up; ela só registra o estado comercial;
+    - "ganho" não é aceito aqui: uma venda só vira ganha pelo fluxo fechar_pedido;
+    - "perdido" só deve ser usado quando houver recusa clara/definitiva, nunca para
+      "vou pensar", "está caro", "depois vejo" ou simples silêncio.
+    """
+    try:
+        etapa = str(entrada.get("etapa") or "").strip()
+        proxima_acao = str(entrada.get("proxima_acao") or "").strip()[:120]
+        motivo = str(entrada.get("motivo") or "").strip()[:500]
+        followup = str(entrada.get("followup") or "manter").strip().lower()
+
+        if etapa not in ETAPAS_FUNIL_IA:
+            return {
+                "erro": "etapa_invalida",
+                "mensagem": "Etapa comercial inválida. Use novo, qualificacao, orcamento, negociacao, fechamento ou perdido.",
+            }
+
+        if followup not in {"manter", "agendar", "cancelar"}:
+            return {
+                "erro": "followup_invalido",
+                "mensagem": "A ação de follow-up deve ser manter, agendar ou cancelar.",
+            }
+
+        if etapa == "perdido" and not motivo:
+            return {
+                "erro": "motivo_perda_obrigatorio",
+                "mensagem": "Para marcar uma oportunidade como perdida, informe o motivo claro da perda.",
+            }
+
+        ultima_acao = proxima_acao or f"etapa_{etapa}"
+        atualizado = atualizar_etapa_funil(
+            conversa_id,
+            etapa,
+            ultima_acao=ultima_acao,
+            motivo_perda=motivo if etapa == "perdido" else None,
+        )
+        if not atualizado:
+            return {
+                "erro": "falha_atualizacao",
+                "mensagem": "Não foi possível atualizar o funil comercial agora.",
+            }
+
+        followup_status = "mantido"
+
+        if etapa == "perdido":
+            cancelar_followup(conversa_id, acao="lead_perdido")
+            followup_status = "cancelado"
+        elif followup == "cancelar":
+            cancelar_followup(conversa_id, acao=ultima_acao)
+            followup_status = "cancelado"
+        elif followup == "agendar":
+            horas_raw = entrada.get("followup_horas")
+            try:
+                horas = float(horas_raw)
+            except (TypeError, ValueError):
+                return {
+                    "erro": "followup_horas_invalido",
+                    "mensagem": "Para agendar follow-up, informe followup_horas como número.",
+                }
+
+            if horas < 1 or horas > 168:
+                return {
+                    "erro": "followup_horas_fora_do_limite",
+                    "mensagem": "O follow-up deve ser agendado entre 1 e 168 horas.",
+                }
+
+            quando = datetime.now(timezone.utc) + timedelta(hours=horas)
+            if not agendar_followup(conversa_id, quando, acao=ultima_acao):
+                return {
+                    "erro": "falha_agendamento",
+                    "mensagem": "A etapa foi atualizada, mas não foi possível agendar o follow-up.",
+                }
+            followup_status = "agendado"
+
+        estado = obter_estado_comercial(conversa_id)
+        return {
+            "ok": True,
+            "etapa_funil": estado.get("etapa_funil"),
+            "lead_score": estado.get("lead_score"),
+            "proxima_acao": proxima_acao or None,
+            "followup": followup_status,
+            "proximo_followup_em": (
+                estado.get("proximo_followup_em").isoformat()
+                if getattr(estado.get("proximo_followup_em"), "isoformat", None)
+                else estado.get("proximo_followup_em")
+            ),
+            "motivo_perda": estado.get("motivo_perda"),
+            "aviso": "Estado comercial registrado. Nenhuma mensagem automática foi enviada por esta ferramenta.",
+        }
+    except Exception as e:
+        logger.error(
+            "Falha ao atualizar funil comercial",
+            extra={"evento": "erro_atualizar_funil_comercial", "conversa_id": conversa_id, "erro": str(e)},
+        )
+        return {
+            "erro": "falha_atualizacao",
+            "mensagem": "Não foi possível atualizar o funil comercial agora. Continue a conversa normalmente.",
+        }
+
+
 TOOLS = [
     {
         "name": "atualizar_pedido",
@@ -370,6 +492,40 @@ TOOLS = [
                 "milheiros": {"type": "number", "description": "quantidade pedida, em milheiros (mil unidades)"},
             },
             "required": ["produto", "material", "largura", "altura", "espessura", "cores_n", "impressao", "milheiros"],
+        },
+    },
+
+    {
+        "name": "atualizar_funil_comercial",
+        "description": "Registra a etapa atual da oportunidade de venda e a próxima ação comercial. Use quando houver mudança real de etapa ou quando a próxima ação/follow-up precisar ser registrada. Etapas: novo = contato ainda sem necessidade clara; qualificacao = entendendo produto/medidas/material/quantidade; orcamento = preço/proposta já foi apresentado; negociacao = cliente está avaliando, comparando, objetando preço/prazo ou pediu condição; fechamento = cliente demonstra intenção forte de avançar, mas ainda não confirmou definitivamente; perdido = cliente recusou de forma clara e definitiva ou informou que não vai comprar. NUNCA marque como perdido só porque disse 'vou pensar', 'está caro', 'mais tarde' ou ficou em silêncio. Venda ganha NÃO é marcada por esta ferramenta: use fechar_pedido quando houver confirmação clara. Esta ferramenta pode apenas REGISTRAR um horário de follow-up; ela não envia mensagem sozinha.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "etapa": {
+                    "type": "string",
+                    "enum": ["novo", "qualificacao", "orcamento", "negociacao", "fechamento", "perdido"],
+                },
+                "proxima_acao": {
+                    "type": "string",
+                    "description": "Próxima ação comercial em frase curta, ex.: 'pedir espessura', 'aguardar decisão sobre orçamento', 'trabalhar objeção de preço'.",
+                },
+                "motivo": {
+                    "type": "string",
+                    "description": "Contexto breve da mudança de etapa. É obrigatório quando etapa='perdido'.",
+                },
+                "followup": {
+                    "type": "string",
+                    "enum": ["manter", "agendar", "cancelar"],
+                    "description": "manter = não muda o follow-up existente; agendar = registra um próximo follow-up; cancelar = remove follow-up pendente.",
+                },
+                "followup_horas": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 168,
+                    "description": "Quantidade de horas até o próximo follow-up. Só use quando followup='agendar'.",
+                },
+            },
+            "required": ["etapa", "proxima_acao", "followup"],
         },
     },
     {
