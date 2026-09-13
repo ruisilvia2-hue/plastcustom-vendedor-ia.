@@ -16,7 +16,7 @@ from app.tools import (
     executar_atualizar_funil_comercial,
 )
 from app.whatsapp import notificar_pedido_fechado, notificar_transferencia, notificar_privacidade
-from app.database import marcar_conversa_fechada, obter_estado_comercial
+from app.database import marcar_conversa_fechada, obter_estado_comercial, pausar_bot
 
 client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
@@ -246,7 +246,9 @@ FERRAMENTAS:
   Se total_final existir, ele tem prioridade absoluta para a linha "Total final".
 - atualizar_funil_comercial: registre a etapa comercial e a próxima ação quando houver mudança real no avanço da venda. Não revele isso ao cliente.
 - fechar_pedido: chame quando o cliente confirmar que quer fechar (depois de já ver o preço oficial).
-- transferir_para_consultor: só depois de tentar responder você mesmo.
+- transferir_para_consultor: só depois de tentar responder você mesmo. Quando chamar esta ferramenta,
+  informe de forma breve que um consultor humano vai assumir e NÃO continue fazendo perguntas de venda
+  na mesma resposta. A automação ficará pausada para essa conversa.
 - solicitar_privacidade: pedidos relacionados a dados pessoais (LGPD).
 - Se uma ferramenta devolver "erro", NÃO informe nenhum valor - siga a instrução que vier junto do erro.
 
@@ -427,8 +429,30 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
                 marcar_conversa_fechada(conversa["id"])
                 resultado = {"ok": True, "mensagem": "Consultor notificado com sucesso. Esta conversa foi concluída - uma próxima mensagem do cliente inicia um pedido novo."}
             elif bloco.name == "transferir_para_consultor":
-                notificar_transferencia(cliente, conversa["id"], bloco.input.get("motivo", ""))
-                resultado = {"ok": True, "mensagem": "Consultor avisado, vai assumir a conversa em breve."}
+                motivo_transferencia = bloco.input.get("motivo", "")
+                notificar_transferencia(cliente, conversa["id"], motivo_transferencia)
+
+                # HANDOFF REAL: depois de avisar o consultor, congela a automação desta
+                # conversa e remove qualquer follow-up pendente. As próximas mensagens
+                # continuam chegando ao webhook, mas ele devolve resposta vazia e não
+                # chama mais a IA enquanto o bot estiver pausado.
+                pausado = pausar_bot(conversa["id"], motivo_transferencia)
+                if pausado:
+                    resultado = {
+                        "ok": True,
+                        "bot_pausado": True,
+                        "mensagem": "Consultor avisado e atendimento automático pausado. Um humano vai assumir a conversa.",
+                    }
+                else:
+                    logger.error(
+                        "Consultor foi avisado, mas não foi possível pausar o bot",
+                        extra={"evento": "handoff_pausa_falhou", "conversa_id": conversa["id"]},
+                    )
+                    resultado = {
+                        "ok": False,
+                        "bot_pausado": False,
+                        "mensagem": "Consultor avisado, mas houve uma falha ao pausar o atendimento automático.",
+                    }
             elif bloco.name == "solicitar_privacidade":
                 notificar_privacidade(cliente, conversa["id"], bloco.input.get("tipo", "duvida"), bloco.input.get("detalhe", ""))
                 resultado = {"ok": True, "mensagem": "Pedido registrado, a equipe vai tratar diretamente com o cliente."}
