@@ -439,6 +439,73 @@ def bot_esta_pausado(conversa_id: str) -> bool:
         cur.close(); release_db(db)
 
 
+def retomar_bot_por_telefone(telefone: str) -> Dict[str, Any]:
+    """Retoma a conversa pausada mais recente de um telefone.
+
+    Uso administrativo: permite ao n8n/painel retomar o atendimento automático
+    sem precisar conhecer o conversa_id interno.
+    """
+    if not garantir_estrutura_comercial():
+        return {"ok": False, "retomado": False, "motivo": "estrutura_comercial_indisponivel"}
+
+    telefone_limpo = limpar_telefone(telefone)
+    if not telefone_limpo:
+        return {"ok": False, "retomado": False, "motivo": "telefone_invalido"}
+
+    db = get_db()
+    cur = db.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("""
+            SELECT c.id AS conversa_id
+            FROM conversas c
+            JOIN clientes cl ON cl.id = c.cliente_id
+            WHERE cl.telefone=%s
+              AND c.status='ativa'
+              AND c.bot_pausado=TRUE
+            ORDER BY c.ultima_mensagem DESC
+            LIMIT 1
+        """, (telefone_limpo,))
+        row = cur.fetchone()
+
+        if not row:
+            return {
+                "ok": True,
+                "retomado": False,
+                "motivo": "nenhuma_conversa_pausada",
+            }
+
+        cur.execute("""
+            UPDATE conversas
+            SET bot_pausado=FALSE,
+                ultima_acao_comercial='bot_retomado',
+                proximo_followup_em=NULL
+            WHERE id=%s
+        """, (row["conversa_id"],))
+        db.commit()
+
+        logger.info(
+            "Atendimento automático retomado",
+            extra={
+                "evento": "bot_retomado",
+                "conversa_id": row["conversa_id"],
+            },
+        )
+        return {
+            "ok": True,
+            "retomado": True,
+            "conversa_id": str(row["conversa_id"]),
+        }
+    except psycopg2.Error as e:
+        db.rollback()
+        logger.warning(
+            f"Não foi possível retomar bot por telefone: {e}",
+            extra={"evento": "retomar_bot_por_telefone_falhou"},
+        )
+        return {"ok": False, "retomado": False, "motivo": "erro_banco"}
+    finally:
+        cur.close(); release_db(db)
+
+
 # ============================================================
 # CLIENTES / CONVERSAS / PEDIDO
 # ============================================================
