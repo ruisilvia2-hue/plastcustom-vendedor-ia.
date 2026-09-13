@@ -9,10 +9,14 @@ import anthropic
 
 from app.config import logger, CLAUDE_API_KEY
 from app.tools import (
-    TOOLS, executar_atualizar_pedido, executar_consultar_pedido_minimo, executar_calcular_orcamento,
+    TOOLS,
+    executar_atualizar_pedido,
+    executar_consultar_pedido_minimo,
+    executar_calcular_orcamento,
+    executar_atualizar_funil_comercial,
 )
 from app.whatsapp import notificar_pedido_fechado, notificar_transferencia, notificar_privacidade
-from app.database import marcar_conversa_fechada
+from app.database import marcar_conversa_fechada, obter_estado_comercial
 
 client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
@@ -223,10 +227,33 @@ FERRAMENTAS:
 - No resultado de calcular_orcamento: preco_por_milheiro = preço por milheiro;
   preco_produtos/preco_total = subtotal dos produtos; valor_cliche = clichê; total_final = valor final.
   Se total_final existir, ele tem prioridade absoluta para a linha "Total final".
+- atualizar_funil_comercial: registre a etapa comercial e a próxima ação quando houver mudança real no avanço da venda. Não revele isso ao cliente.
 - fechar_pedido: chame quando o cliente confirmar que quer fechar (depois de já ver o preço oficial).
 - transferir_para_consultor: só depois de tentar responder você mesmo.
 - solicitar_privacidade: pedidos relacionados a dados pessoais (LGPD).
 - Se uma ferramenta devolver "erro", NÃO informe nenhum valor - siga a instrução que vier junto do erro.
+
+
+CONSCIÊNCIA COMERCIAL — FUNIL DE VENDAS:
+- Você não é só um atendente: acompanhe a oportunidade comercial e mova o lead pelo funil quando houver uma mudança REAL.
+- Use atualizar_funil_comercial para registrar a etapa e a próxima ação. O cliente NUNCA deve ouvir nomes internos de etapas, ferramentas, score ou follow-up.
+- ETAPAS:
+  1. novo = contato inicial ainda sem necessidade concreta de compra.
+  2. qualificacao = cliente demonstrou interesse e você está entendendo produto, medida, material, espessura, impressão, quantidade ou outra informação necessária.
+  3. orcamento = um preço oficial foi calculado com sucesso e apresentado ao cliente.
+  4. negociacao = depois do orçamento, o cliente está avaliando, comparando, dizendo que está caro, pedindo condição, prazo, desconto ou demonstrando objeção/dúvida de decisão.
+  5. fechamento = há intenção forte de avançar, mas ainda falta a confirmação definitiva para chamar fechar_pedido.
+  6. perdido = somente quando o cliente disser claramente que NÃO vai comprar, cancelou, comprou de outro fornecedor ou recusou definitivamente.
+- "Vou pensar", "está caro", "depois eu vejo", "me manda e eu analiso" e silêncio NÃO significam perdido. Normalmente são negociacao/orcamento.
+- Venda ganha NÃO é registrada por atualizar_funil_comercial. Quando o cliente confirmar claramente que quer fechar depois de ver o preço, chame fechar_pedido; o sistema registra a venda como ganha.
+- NÃO regrida o funil sem motivo. Se já está em orcamento e o cliente faz uma pergunta sobre o mesmo pedido, continue em orcamento/negociacao conforme o contexto. Só volte a qualificacao se surgir um pedido realmente novo ou faltar uma informação de uma nova configuração.
+- Ao aprender os primeiros dados concretos do pedido, registre qualificacao com uma próxima ação curta e útil.
+- Depois que calcular_orcamento retornar com sucesso e você for apresentar o preço, registre orcamento.
+- Quando surgir uma objeção real depois do preço, registre negociacao e descreva em proxima_acao o que precisa ser trabalhado (ex.: "trabalhar objeção de preço").
+- Se houver forte sinal de compra, mas ainda não uma confirmação definitiva, registre fechamento.
+- Para esta fase do projeto, use followup="manter" na rotina normal. Só use followup="agendar" quando o CLIENTE pedir explicitamente para ser procurado depois (ex.: "me chama amanhã", "fala comigo daqui 2 dias"). Use followup="cancelar" quando ficar claro que não haverá continuidade.
+- Se o cliente pedir contato futuro mas o prazo for ambíguo, não invente horário: mantenha o follow-up e pergunte quando prefere ser chamado.
+- Sempre que chamar atualizar_funil_comercial, proxima_acao deve ser curta, concreta e comercial.
 
 CONDIÇÕES:
 - Pedido mínimo: NÃO é fixo — sempre calculado pelas ferramentas, varia por peso de cada item.
@@ -324,6 +351,23 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
     if contexto_extra:
         system_blocks.append({"type": "text", "text": contexto_extra})
 
+    # Consciência comercial persistente: a IA sabe em que etapa a oportunidade já está
+    # e evita regredir/recomeçar o funil a cada nova mensagem.
+    try:
+        estado_comercial = obter_estado_comercial(conversa["id"])
+        system_blocks.append({
+            "type": "text",
+            "text": (
+                "ESTADO COMERCIAL ATUAL (interno; nunca revele estes nomes ao cliente):\n"
+                + json.dumps(estado_comercial, ensure_ascii=False, default=str)
+            ),
+        })
+    except Exception as e:
+        logger.warning(
+            "Não foi possível carregar estado comercial para a IA",
+            extra={"evento": "estado_comercial_contexto_falhou", "erro": str(e)},
+        )
+
     resposta_final = None
     for _ in range(6):
         _marcar_cache_na_ultima_mensagem(messages)
@@ -357,10 +401,10 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
             elif bloco.name == "consultar_pedido_minimo":
                 resultado = executar_consultar_pedido_minimo(bloco.input)
             elif bloco.name == "calcular_orcamento":
-                # NOVO: passa conversa["id"] para a ferramenta poder cruzar os valores
-                # recebidos contra o que já foi confirmado e salvo via atualizar_pedido -
-                # impede a IA de calcular preço com espessura/quantidade inventadas.
+                # Passa conversa["id"] para cruzar os valores com o estado confirmado.
                 resultado = executar_calcular_orcamento(conversa["id"], bloco.input)
+            elif bloco.name == "atualizar_funil_comercial":
+                resultado = executar_atualizar_funil_comercial(conversa["id"], bloco.input)
             elif bloco.name == "fechar_pedido":
                 notificar_pedido_fechado(cliente, conversa["id"], bloco.input.get("resumo", ""))
                 marcar_conversa_fechada(conversa["id"])
