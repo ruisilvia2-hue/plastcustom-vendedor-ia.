@@ -15,7 +15,7 @@ from app.database import (
     buscar_ou_criar_cliente, buscar_ou_criar_conversa, verificar_mensagem_duplicada,
     salvar_mensagem, obter_historico, obter_estado_pedido, calcular_score,
     limpar_dados_antigos, existe_mensagem_cliente_mais_nova, verificar_conexao_db,
-    buscar_conversas_para_reengajar,
+    buscar_conversas_para_reengajar, bot_esta_pausado,
 )
 from app.whatsapp import notificar_proprietario, reengajar_cliente
 from app.ia import gerar_resposta, SYSTEM_PROMPT
@@ -61,6 +61,17 @@ def webhook():
             conversa = buscar_ou_criar_conversa(cliente["id"])
             correlation_id_var.set(str(conversa["id"])[:8])
             salvar_mensagem(conversa["id"], "cliente", "[cliente enviou uma mídia - áudio, imagem, figurinha ou documento]")
+
+            # HANDOFF HUMANO: se um consultor assumiu, o bot permanece completamente
+            # silencioso inclusive para mídia. Antes desta checagem, uma imagem/áudio
+            # ainda geraria a resposta automática pedindo texto, mesmo com o bot pausado.
+            if bot_esta_pausado(conversa["id"]):
+                logger.info(
+                    "Mensagem de mídia recebida durante atendimento humano - bot silencioso",
+                    extra={"evento": "bot_pausado_midia", "conversa_id": conversa["id"]},
+                )
+                return jsonify({"ok": True, "resposta": "", "bot_pausado": True}), 200
+
             resposta = "Recebi algo aqui, mas ainda não consigo ouvir áudio nem ver imagem/figurinha 🙏 Pode me escrever em texto o que você precisa?"
             salvar_mensagem(conversa["id"], "ia", resposta)
             return jsonify({"ok": True, "resposta": resposta})
@@ -88,6 +99,20 @@ def webhook():
         if resposta_duplicada is not None:
             logger.warning(f"Mensagem duplicada detectada (id={mensagem_id}) - devolvendo resposta anterior sem reprocessar")
             return jsonify({"ok": True, "resposta": resposta_duplicada, "duplicado": True})
+
+        # ================================================================
+        # HANDOFF HUMANO / BOT PAUSADO
+        # ================================================================
+        # Se um consultor humano assumiu esta conversa, ainda registramos a mensagem
+        # do cliente no histórico, mas NÃO chamamos Anti-Bot, IA nem geramos resposta.
+        # O n8n já está configurado para não enviar quando "resposta" vier vazia.
+        if bot_esta_pausado(conversa["id"]):
+            salvar_mensagem(conversa["id"], "cliente", mensagem)
+            logger.info(
+                "Mensagem recebida durante atendimento humano - bot permaneceu silencioso",
+                extra={"evento": "bot_pausado_silencio", "conversa_id": conversa["id"]},
+            )
+            return jsonify({"ok": True, "resposta": "", "bot_pausado": True}), 200
 
         # ================================================================
         # ANTI-BOT / CIRCUIT BREAKER COM REDIS
