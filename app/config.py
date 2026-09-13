@@ -87,14 +87,17 @@ logger.propagate = False  # evita duplicar a linha de log via o logger raiz
 # ============================================================
 # RATE LIMITING (proteção contra abuso/DoS)
 # ============================================================
-# ATENÇÃO - mesma limitação que já vimos no recarregar_tabela_precos: por padrão,
-# isso guarda a contagem NA MEMÓRIA de cada processo do Gunicorn separadamente.
-# Com --workers 4, o limite de verdade fica ~4x mais permissivo do que o número
-# sugere (cada worker conta por conta própria). Pra um limite exato entre todos os
-# workers, seria preciso apontar storage_uri pro Redis que vocês já têm rodando
-# pro n8n (ex: storage_uri="redis://usuario:senha@host:porta"). Por enquanto,
-# a versão em memória já resolve o principal (parar abuso/DoS na prática).
-limiter = Limiter(key_func=get_remote_address, default_limits=["200 per hour"])
+# Em produção o Flask-Limiter usa o MESMO Redis dedicado do Anti-Bot.
+# Assim, todos os workers do Gunicorn compartilham a mesma contagem e o limite
+# deixa de ser "por processo". Se a variável não existir, o serviço falha ao subir
+# em vez de voltar silenciosamente para memória e dar uma falsa sensação de proteção.
+RATE_LIMIT_STORAGE_URI = os.environ["ANTI_BOT_REDIS_URL"]
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["200 per hour"],
+    storage_uri=RATE_LIMIT_STORAGE_URI,
+)
 
 # ============================================================
 # VARIÁVEIS DE AMBIENTE (credenciais e configuração de infraestrutura)
