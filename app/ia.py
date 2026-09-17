@@ -117,6 +117,25 @@ NUNCA INVENTE VALORES PARA CALCULAR PREÇO — REGRA CRÍTICA:
   dizer o que falta confirmar. Trate isso como um sinal real de que falta perguntar
   algo ao cliente, não como um erro técnico para contornar.
 
+
+ANÁLISE DE IMAGENS ENVIADAS PELO CLIENTE:
+- Quando houver imagem anexada, OLHE a imagem antes de perguntar algo que pode estar claramente visível nela.
+- Use como informação confiável apenas o que estiver realmente legível/inequívoco na imagem.
+- Você pode reconhecer visualmente o TIPO DE PRODUTO, medidas escritas na arte, cor aparente da sacola,
+  presença de frente/verso e textos/identidade visual claramente mostrados.
+- Exemplo: se a imagem mostra uma sacola com alça vazada e as medidas "25 x 33 cm" e "40 x 60 cm",
+  reconheça Sacola Vazada e os dois tamanhos. Se a relação entre os tamanhos e o mesmo produto estiver
+  clara, trate como dois itens do pedido.
+- NÃO invente material, espessura ou quantidade a partir da aparência da foto. Esses campos continuam
+  exigindo confirmação do cliente.
+- Número exato de cores de impressão também deve ser confirmado quando houver qualquer dúvida de efeito,
+  degradê, metalizado, fotografia, iluminação ou acabamento. Você pode dizer o que parece ver e confirmar.
+- Se a imagem mostra frente e verso/fundo de forma inequívoca, você pode mencionar que entendeu que há
+  personalização nos dois lados, mas confirme antes do preço se isso ainda não estiver textual/confirmado.
+- Nunca responda "não consigo ver imagem" quando uma imagem analisável estiver anexada.
+- Ao receber referência visual, comece confirmando em linguagem natural o que entendeu e pergunte SOMENTE
+  os dados que faltam. Não volte ao menu de produtos se o produto já estiver evidente na imagem.
+
 COMO CONVERSAR — O NÚCLEO DE COMO VOCÊ DEVE SE COMPORTAR:
 - Você é um vendedor de verdade tendo uma conversa, não um formulário lendo perguntas em ordem fixa.
 - A entrada pode ser um PACOTE do buffer do WhatsApp com várias mensagens curtas separadas por quebras de linha. Leia o pacote INTEIRO antes de responder.
@@ -362,7 +381,74 @@ def _marcar_cache_na_ultima_mensagem(messages):
             ultimo_bloco["cache_control"] = {"type": "ephemeral"}
 
 
-def gerar_resposta(messages, contexto_extra, cliente, conversa):
+
+def _anexar_imagens_na_ultima_mensagem(messages, imagens):
+    """Converte a última mensagem do cliente para conteúdo multimodal da Claude.
+
+    As imagens ficam somente nesta chamada. O banco guarda apenas uma anotação textual,
+    nunca o base64 completo.
+    """
+    if not imagens or not messages:
+        return
+
+    ultima = messages[-1]
+    if ultima.get("role") != "user":
+        return
+
+    conteudo_atual = ultima.get("content", "")
+    if isinstance(conteudo_atual, str):
+        texto = conteudo_atual.strip()
+    elif isinstance(conteudo_atual, list):
+        textos = [
+            bloco.get("text", "")
+            for bloco in conteudo_atual
+            if isinstance(bloco, dict) and bloco.get("type") == "text"
+        ]
+        texto = "\n".join(t for t in textos if t).strip()
+    else:
+        texto = ""
+
+    blocos = []
+
+    # Limite defensivo por chamada. O buffer preserva todas as imagens; aqui enviamos
+    # até 4 referências visuais de uma vez para controlar tamanho/custo da requisição.
+    for imagem in imagens[:4]:
+        b64 = imagem.get("base64")
+        mimetype = imagem.get("mimetype")
+
+        if not b64 or mimetype not in {
+            "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"
+        }:
+            continue
+
+        # A API usa image/jpeg, não image/jpg.
+        if mimetype == "image/jpg":
+            mimetype = "image/jpeg"
+
+        blocos.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": mimetype,
+                "data": b64,
+            },
+        })
+
+    if not blocos:
+        return
+
+    blocos.append({
+        "type": "text",
+        "text": texto or (
+            "O cliente enviou estas imagens como referência para o pedido. "
+            "Analise o que está visível e conduza a conversa a partir disso."
+        ),
+    })
+
+    ultima["content"] = blocos
+
+
+def gerar_resposta(messages, contexto_extra, cliente, conversa, imagens=None):
     """Roda o loop de ferramentas com a Claude até obter uma resposta final em texto."""
     system_blocks = [
         {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
@@ -386,6 +472,8 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa):
             "Não foi possível carregar estado comercial para a IA",
             extra={"evento": "estado_comercial_contexto_falhou", "erro": str(e)},
         )
+
+    _anexar_imagens_na_ultima_mensagem(messages, imagens or [])
 
     resposta_final = None
     for _ in range(6):
