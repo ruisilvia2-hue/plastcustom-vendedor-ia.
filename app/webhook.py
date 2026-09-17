@@ -131,14 +131,18 @@ def webhook():
         mensagem_id = (data.get("mensagem_id") or "")[:100] or None
         resposta_duplicada = verificar_mensagem_duplicada(mensagem_id, conversa["id"])
         if resposta_duplicada is not None:
+            # IMPORTANTE: uma duplicata NUNCA deve reenviar ao WhatsApp a resposta
+            # anterior. O n8n só envia mensagens quando "resposta" não está vazia.
+            # Assim, o primeiro processamento vence e qualquer execução paralela com
+            # o mesmo mensagem_id termina silenciosamente antes de chamar a IA.
             logger.warning(
-                f"Mensagem duplicada detectada (id={mensagem_id}) - devolvendo resposta anterior sem reprocessar"
+                f"Mensagem duplicada detectada (id={mensagem_id}) - descartando reprocessamento"
             )
             return jsonify({
                 "ok": True,
-                "resposta": resposta_duplicada,
+                "resposta": "",
                 "duplicado": True,
-            })
+            }), 200
 
         # Handoff humano: não baixa mídia, não chama IA e não gasta créditos.
         if bot_esta_pausado(conversa["id"]):
