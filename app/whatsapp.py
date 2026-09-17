@@ -1,13 +1,15 @@
 """
-Envio de mensagens via Evolution API e as notificações internas (pro dono/consultor)
-que o robô dispara em momentos-chave: lead quente, pedido fechado, pedido de
-privacidade (LGPD), e transferência para atendimento humano.
+Envio de mensagens via Evolution API, recuperação segura de mídia recebida e as
+notificações internas (pro dono/consultor) que o robô dispara em momentos-chave:
+lead quente, pedido fechado, pedido de privacidade (LGPD), e transferência para
+atendimento humano.
 
-NÃO envia a resposta ao CLIENTE - isso é feito pelo n8n (ver README do projeto),
-evitando mandar a mesma mensagem duas vezes.
+NÃO envia a resposta normal ao CLIENTE - isso é feito pelo n8n (ver README do
+projeto), evitando mandar a mesma mensagem duas vezes.
 """
+import base64
 import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import requests
 from psycopg2.extras import RealDictCursor
@@ -17,10 +19,171 @@ from app.database import get_db, release_db, salvar_mensagem
 
 # Códigos de status que valem a pena tentar de novo (erro do lado do servidor,
 # ou "muitas requisições" - provavelmente vai passar sozinho em alguns segundos).
-# 400/401/403/404 NÃO entram aqui de propósito: são erros PERMANENTES (chave errada,
-# número inválido, endpoint errado) - tentar de novo não muda nada, só atrasa e
-# desperdiça tempo. Nesses casos, falha rápido e loga bem para investigar depois.
 _STATUS_TRANSIENTE = {429, 500, 502, 503, 504}
+
+# Claude Vision aceita estes formatos diretamente. Outros tipos de mídia (áudio,
+# PDF, figurinha etc.) serão tratados em etapas próprias, sem fingir que são imagem.
+_MIMES_IMAGEM_SUPORTADOS = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+}
+
+# Limite defensivo para não carregar uma mídia enorme no backend/IA.
+_MAX_IMAGEM_BYTES = 12 * 1024 * 1024  # 12 MB
+
+
+def _normalizar_base64(valor: str) -> str:
+    """Remove prefixo data:*;base64, se a Evolution devolver nesse formato."""
+    if not valor:
+        return ""
+    valor = valor.strip()
+    if valor.startswith("data:") and "," in valor:
+        valor = valor.split(",", 1)[1]
+    return valor
+
+
+def obter_midia_base64(
+    instance: str,
+    mensagem_evolution: Dict[str, Any],
+    tentativas: int = 2,
+) -> Dict[str, Any]:
+    """Baixa uma mídia recebida do WhatsApp através da própria Evolution API.
+
+    A Evolution expõe POST /chat/getBase64FromMediaMessage/{instance} e espera
+    o WebMessageInfo completo em {"message": ...}. O retorno normalmente inclui
+    mimetype, mediaType, fileName, caption e base64.
+
+    Esta função NÃO chama IA e NÃO envia mensagem ao cliente. Ela apenas recupera,
+    valida e normaliza a mídia para o webhook/ia.py consumirem depois.
+    """
+    if not instance:
+        return {"ok": False, "erro": "instance_ausente"}
+
+    if not isinstance(mensagem_evolution, dict) or not mensagem_evolution:
+        return {"ok": False, "erro": "mensagem_evolution_invalida"}
+
+    url = f"{EVOLUTION_URL}/chat/getBase64FromMediaMessage/{instance}"
+    headers = {
+        "Content-Type": "application/json",
+        "apikey": EVOLUTION_KEY,
+    }
+    payload = {
+        "message": mensagem_evolution,
+        "convertToMp4": False,
+    }
+
+    for tentativa in range(1, tentativas + 1):
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=20)
+
+            if r.status_code >= 300:
+                if r.status_code in _STATUS_TRANSIENTE and tentativa < tentativas:
+                    espera = 2 ** (tentativa - 1)
+                    logger.warning(
+                        "Falha transitória ao obter mídia da Evolution; tentando novamente",
+                        extra={
+                            "evento": "midia_retry",
+                            "status": r.status_code,
+                            "tentativa": tentativa,
+                        },
+                    )
+                    time.sleep(espera)
+                    continue
+
+                logger.warning(
+                    "Evolution não conseguiu devolver a mídia",
+                    extra={
+                        "evento": "midia_evolution_falhou",
+                        "status": r.status_code,
+                        "detalhe": r.text[:300],
+                    },
+                )
+                return {
+                    "ok": False,
+                    "erro": "evolution_nao_obteve_midia",
+                    "status": r.status_code,
+                }
+
+            dados = r.json() if r.content else {}
+            b64 = _normalizar_base64(dados.get("base64") or "")
+            mimetype = (dados.get("mimetype") or "").split(";", 1)[0].strip().lower()
+            media_type = dados.get("mediaType")
+            caption = dados.get("caption") or ""
+            file_name = dados.get("fileName")
+
+            if not b64:
+                return {
+                    "ok": False,
+                    "erro": "midia_sem_base64",
+                    "media_type": media_type,
+                    "mimetype": mimetype,
+                }
+
+            try:
+                tamanho_bytes = len(base64.b64decode(b64, validate=False))
+            except Exception:
+                return {
+                    "ok": False,
+                    "erro": "base64_invalido",
+                    "media_type": media_type,
+                    "mimetype": mimetype,
+                }
+
+            if tamanho_bytes > _MAX_IMAGEM_BYTES:
+                logger.warning(
+                    "Mídia recusada por tamanho",
+                    extra={
+                        "evento": "midia_grande_demais",
+                        "bytes": tamanho_bytes,
+                        "mimetype": mimetype,
+                    },
+                )
+                return {
+                    "ok": False,
+                    "erro": "midia_grande_demais",
+                    "tamanho_bytes": tamanho_bytes,
+                    "limite_bytes": _MAX_IMAGEM_BYTES,
+                    "mimetype": mimetype,
+                }
+
+            return {
+                "ok": True,
+                "base64": b64,
+                "mimetype": mimetype,
+                "media_type": media_type,
+                "file_name": file_name,
+                "caption": caption,
+                "tamanho_bytes": tamanho_bytes,
+                "imagem_suportada": mimetype in _MIMES_IMAGEM_SUPORTADOS,
+            }
+
+        except requests.exceptions.RequestException as e:
+            if tentativa < tentativas:
+                espera = 2 ** (tentativa - 1)
+                logger.warning(
+                    "Erro de rede ao obter mídia; tentando novamente",
+                    extra={"evento": "midia_retry_rede", "tentativa": tentativa},
+                )
+                time.sleep(espera)
+                continue
+
+            logger.error(
+                "Falha de rede ao obter mídia da Evolution",
+                extra={"evento": "midia_falhou_rede", "erro": str(e)},
+            )
+            return {"ok": False, "erro": "falha_rede_evolution"}
+
+        except ValueError as e:
+            logger.warning(
+                "Evolution devolveu resposta não-JSON ao solicitar mídia",
+                extra={"evento": "midia_resposta_invalida", "erro": str(e)},
+            )
+            return {"ok": False, "erro": "resposta_evolution_invalida"}
+
+    return {"ok": False, "erro": "falha_midia_desconhecida"}
 
 
 def enviar_whatsapp(telefone, mensagem, instance="automacao", tentativas=3):
@@ -44,21 +207,19 @@ def enviar_whatsapp(telefone, mensagem, instance="automacao", tentativas=3):
                 )
                 return True
             if r.status_code in _STATUS_TRANSIENTE and tentativa < tentativas:
-                espera = 2 ** (tentativa - 1)  # 1s, 2s, 4s...
+                espera = 2 ** (tentativa - 1)
                 logger.warning(
                     f"Evolution API respondeu {r.status_code} (transiente) - tentando de novo em {espera}s",
                     extra={"evento": "whatsapp_retry", "status": r.status_code, "tentativa": tentativa},
                 )
                 time.sleep(espera)
                 continue
-            # Erro permanente, ou última tentativa transiente esgotada - desiste e loga.
             logger.error(
                 f"Falha ao enviar WhatsApp (status {r.status_code}): {r.text[:200]}",
                 extra={"evento": "whatsapp_falhou", "status": r.status_code, "tentativa": tentativa},
             )
             return False
         except requests.exceptions.RequestException as e:
-            # Erro de rede/timeout - sempre vale tentar de novo (é o caso mais transiente que existe).
             if tentativa < tentativas:
                 espera = 2 ** (tentativa - 1)
                 logger.warning(
@@ -76,11 +237,7 @@ def enviar_whatsapp(telefone, mensagem, instance="automacao", tentativas=3):
 
 
 def reengajar_cliente(telefone: str, nome: Optional[str], conversa_id: str, cliente_id: str) -> bool:
-    """Manda UMA mensagem curta de retomada pra um cliente que sumiu no meio da conversa
-    (chamado pelo endpoint /admin/reengajar-conversas). A checagem de 'já reengajou antes'
-    já foi feita em buscar_conversas_para_reengajar - aqui só confirmamos de novo por
-    segurança (evita duplicar caso a função seja chamada duas vezes muito perto uma da
-    outra) antes de mandar e registrar."""
+    """Manda UMA mensagem curta de retomada pra um cliente que sumiu no meio da conversa."""
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute(
@@ -102,8 +259,6 @@ def reengajar_cliente(telefone: str, nome: Optional[str], conversa_id: str, clie
             (cliente_id, conversa_id)
         )
         db.commit()
-        # Registra a mensagem no histórico da conversa - assim, quando o cliente responder,
-        # a IA já vê no contexto que foi ELA quem retomou o contato, e conduz naturalmente.
         salvar_mensagem(conversa_id, "ia", msg)
     cur.close(); release_db(db)
     return ok
@@ -112,20 +267,24 @@ def reengajar_cliente(telefone: str, nome: Optional[str], conversa_id: str, clie
 def notificar_proprietario(cliente, score, conversa_id):
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT id FROM notificacoes WHERE cliente_id=%s AND tipo='lead_quente' AND enviada_em > NOW() - INTERVAL '24 hours'", (cliente["id"],))
+    cur.execute(
+        "SELECT id FROM notificacoes WHERE cliente_id=%s AND tipo='lead_quente' AND enviada_em > NOW() - INTERVAL '24 hours'",
+        (cliente["id"],)
+    )
     if cur.fetchone():
         cur.close(); release_db(db); return
     nome = cliente.get("nome") or cliente["telefone"]
     msg = f"LEAD QUENTE PLASTCUSTOM\n\nCliente: {nome}\nTelefone: +{cliente['telefone']}\nScore: {score}%\n\nCliente pronto para fechar! Entre em contato agora."
     enviar_whatsapp(PROPRIETARIO, msg)
-    cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'lead_quente')", (cliente["id"], conversa_id))
+    cur.execute(
+        "INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'lead_quente')",
+        (cliente["id"], conversa_id)
+    )
     db.commit(); cur.close(); release_db(db)
 
 
 def notificar_privacidade(cliente, conversa_id, tipo, detalhe):
-    """Avisa o responsável sobre um pedido relacionado a dados pessoais (LGPD) - acesso,
-    correção, exclusão ou dúvida. NÃO apaga nada automaticamente: pedidos de exclusão
-    precisam ser tratados por um humano, com cuidado."""
+    """Avisa o responsável sobre um pedido relacionado a dados pessoais (LGPD)."""
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute(
@@ -135,7 +294,12 @@ def notificar_privacidade(cliente, conversa_id, tipo, detalhe):
     if cur.fetchone():
         cur.close(); release_db(db); return
     nome = cliente.get("nome") or cliente["telefone"]
-    rotulo = {"acesso": "QUER VER OS DADOS", "correcao": "QUER CORRIGIR DADOS", "exclusao": "QUER EXCLUIR DADOS (LGPD)", "duvida": "DÚVIDA SOBRE PRIVACIDADE"}.get(tipo, tipo.upper())
+    rotulo = {
+        "acesso": "QUER VER OS DADOS",
+        "correcao": "QUER CORRIGIR DADOS",
+        "exclusao": "QUER EXCLUIR DADOS (LGPD)",
+        "duvida": "DÚVIDA SOBRE PRIVACIDADE",
+    }.get(tipo, tipo.upper())
     msg = (
         f"PEDIDO DE PRIVACIDADE - {rotulo}\n\n"
         f"Cliente: {nome}\n"
@@ -144,13 +308,15 @@ def notificar_privacidade(cliente, conversa_id, tipo, detalhe):
         "Trate esse pedido diretamente com o cliente (a LGPD pede resposta em prazo razoável)."
     )
     enviar_whatsapp(CONSULTOR_TELEFONE, msg)
-    cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'privacidade')", (cliente["id"], conversa_id))
+    cur.execute(
+        "INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'privacidade')",
+        (cliente["id"], conversa_id)
+    )
     db.commit(); cur.close(); release_db(db)
 
 
 def notificar_transferencia(cliente, conversa_id, motivo):
-    """Avisa o consultor que o robô não conseguiu ajudar e precisa de um humano.
-    Tem um intervalo de 2h entre avisos pra mesma conversa, pra não virar spam."""
+    """Avisa o consultor que o robô precisa de um humano."""
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute(
@@ -168,14 +334,15 @@ def notificar_transferencia(cliente, conversa_id, motivo):
         "O robô já avisou o cliente que um consultor vai assumir a conversa."
     )
     enviar_whatsapp(CONSULTOR_TELEFONE, msg)
-    cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'transferencia')", (cliente["id"], conversa_id))
+    cur.execute(
+        "INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'transferencia')",
+        (cliente["id"], conversa_id)
+    )
     db.commit(); cur.close(); release_db(db)
 
 
 def notificar_pedido_fechado(cliente, conversa_id, resumo):
-    """Envia o resumo do pedido (escrito pela própria IA) para o CONSULTOR_TELEFONE.
-    Tem um intervalo curto (5 min) só pra evitar notificação duplicada instantânea -
-    mas NÃO bloqueia pedidos novos/diferentes feitos depois, na mesma conversa."""
+    """Envia o resumo do pedido para o consultor responsável."""
     db = get_db()
     cur = db.cursor(cursor_factory=RealDictCursor)
     cur.execute(
@@ -193,5 +360,8 @@ def notificar_pedido_fechado(cliente, conversa_id, resumo):
         "Entre em contato para finalizar!"
     )
     enviar_whatsapp(CONSULTOR_TELEFONE, msg)
-    cur.execute("INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'pedido_fechado')", (cliente["id"], conversa_id))
+    cur.execute(
+        "INSERT INTO notificacoes (cliente_id, conversa_id, tipo) VALUES (%s,%s,'pedido_fechado')",
+        (cliente["id"], conversa_id)
+    )
     db.commit(); cur.close(); release_db(db)
