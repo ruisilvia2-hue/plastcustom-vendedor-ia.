@@ -292,7 +292,7 @@ CONSCIÊNCIA COMERCIAL — FUNIL DE VENDAS:
 - Use atualizar_funil_comercial para registrar a etapa e a próxima ação. O cliente NUNCA deve ouvir nomes internos de etapas, ferramentas, score ou follow-up.
 - ETAPAS:
   1. novo = contato inicial ainda sem necessidade concreta de compra.
-  2. qualificacao = cliente demonstrou interesse e você está entendendo produto, medida, material, espessura, impressão, quantidade ou outra informação necessária.
+  2. qualificacao = cliente demonstrou interesse e você está entendendo os dados técnicos necessários do pedido. Quantidade só entra depois de o pedido mínimo ter sido calculado e informado.
   3. orcamento = um preço oficial foi calculado com sucesso e apresentado ao cliente.
   4. negociacao = depois do orçamento, o cliente está avaliando, comparando, dizendo que está caro, pedindo condição, prazo, desconto ou demonstrando objeção/dúvida de decisão.
   5. fechamento = há intenção forte de avançar, mas ainda falta a confirmação definitiva para chamar fechar_pedido.
@@ -360,6 +360,15 @@ OBJEÇÕES — SEMPRE OFEREÇA UMA SAÍDA CONCRETA, NUNCA SÓ ACEITE A OBJEÇÃO
   cores em vez de mudar tamanho).
 - Depois de contornar qualquer objeção, sempre feche com uma pergunta que continue a conversa - nunca
   deixe a resposta parecer um ponto final se o cliente ainda não decidiu.
+
+REGRA FINAL DE SEGURANÇA COMERCIAL — PRIORIDADE MÁXIMA:
+- Antes de enviar qualquer resposta que pergunte "quantidade", "quantas mil", "quantos mil",
+  "quantidade aproximada" ou equivalente, verifique se consultar_pedido_minimo já foi executada
+  para aquela configuração e se o mínimo já pode ser informado ao cliente.
+- Se NÃO foi executada porque ainda faltam dados técnicos, é PROIBIDO perguntar quantidade.
+  Pergunte somente material/espessura/cores/lado/tamanho/produto que estiverem faltando.
+- Esta regra prevalece sobre qualquer orientação genérica de qualificação, coleta de dados ou
+  avanço comercial.
 
 REGRAS GERAIS:
 - Máximo 3-4 parágrafos por resposta
@@ -463,6 +472,65 @@ def _anexar_imagens_na_ultima_mensagem(messages, imagens):
     ultima["content"] = blocos
 
 
+
+def _texto_de_conteudo(conteudo):
+    if isinstance(conteudo, str):
+        return conteudo
+    if isinstance(conteudo, list):
+        partes = []
+        for bloco in conteudo:
+            if isinstance(bloco, dict) and bloco.get("type") == "text":
+                partes.append(bloco.get("text", ""))
+            elif hasattr(bloco, "type") and getattr(bloco, "type", None) == "text":
+                partes.append(getattr(bloco, "text", ""))
+        return "\n".join(partes)
+    return ""
+
+
+def _resposta_pergunta_quantidade_antes_do_minimo(resposta):
+    if not resposta:
+        return False
+
+    t = resposta.lower()
+
+    padroes = (
+        "qual a quantidade",
+        "qual é a quantidade",
+        "qual quantidade",
+        "quantidade aproximada",
+        "quantidade desejada",
+        "quantidade de cada",
+        "quantas mil",
+        "quantos mil",
+        "quantas unidades",
+        "quantos unidades",
+        "quantidade (em",
+        "*quantidade*",
+    )
+
+    if any(p in t for p in padroes):
+        return True
+
+    import re
+    return bool(re.search(
+        r"(me\s+diga|informe|preciso\s+da?|preciso\s+saber).{0,45}\bquantidade\b",
+        t,
+        flags=re.IGNORECASE | re.DOTALL,
+    ))
+
+
+def _historico_ja_informou_pedido_minimo(messages):
+    for mensagem in messages:
+        if mensagem.get("role") != "assistant":
+            continue
+        texto = _texto_de_conteudo(mensagem.get("content", "")).lower()
+        if "pedido mínimo" in texto or "pedido minimo" in texto:
+            if any(ch.isdigit() for ch in texto) and (
+                "mil" in texto or "unidades" in texto or "unidade" in texto
+            ):
+                return True
+    return False
+
 def gerar_resposta(messages, contexto_extra, cliente, conversa, imagens=None):
     """Roda o loop de ferramentas com a Claude até obter uma resposta final em texto."""
     system_blocks = [
@@ -491,6 +559,9 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa, imagens=None):
     _anexar_imagens_na_ultima_mensagem(messages, imagens or [])
 
     resposta_final = None
+    minimo_consultado_nesta_rodada = False
+    minimo_ja_informado_no_historico = _historico_ja_informou_pedido_minimo(messages)
+
     for _ in range(6):
         _marcar_cache_na_ultima_mensagem(messages)
         try:
@@ -522,6 +593,8 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa, imagens=None):
                 resultado = executar_atualizar_pedido(conversa["id"], bloco.input)
             elif bloco.name == "consultar_pedido_minimo":
                 resultado = executar_consultar_pedido_minimo(bloco.input)
+                if isinstance(resultado, dict) and not resultado.get("erro"):
+                    minimo_consultado_nesta_rodada = True
             elif bloco.name == "calcular_orcamento":
                 # Passa conversa["id"] para cruzar os valores com o estado confirmado.
                 resultado = executar_calcular_orcamento(conversa["id"], bloco.input)
@@ -577,4 +650,46 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa, imagens=None):
     # e uma string vazia passava direto, quebrando o salvamento no banco depois.
     if not resposta_final:
         resposta_final = "Deixa eu confirmar mais alguns detalhes com a equipe e já te retorno, pode ser?"
+
+    # BLINDAGEM DETERMINÍSTICA:
+    # Se o modelo insistir em perguntar quantidade antes do mínimo, uma segunda chamada
+    # reescreve a resposta sem essa pergunta. Assim a regra não depende só do prompt.
+    if (
+        _resposta_pergunta_quantidade_antes_do_minimo(resposta_final)
+        and not minimo_consultado_nesta_rodada
+        and not minimo_ja_informado_no_historico
+    ):
+        logger.warning(
+            "Resposta tentou perguntar quantidade antes do pedido mínimo; reescrevendo",
+            extra={"evento": "quantidade_antes_minimo_bloqueada"},
+        )
+
+        sistema_correcao = list(system_blocks) + [{
+            "type": "text",
+            "text": (
+                "CORREÇÃO OBRIGATÓRIA DA RESPOSTA FINAL: nesta rodada o pedido mínimo ainda NÃO foi "
+                "consultado/informado. Gere a resposta ao cliente preservando o que foi corretamente "
+                "entendido, mas REMOVA toda pergunta sobre quantidade, milheiros ou unidades. Pergunte "
+                "somente os dados técnicos ainda necessários para depois calcular o pedido mínimo. "
+                "Não mencione esta correção nem regras internas."
+            ),
+        }]
+
+        try:
+            correcao = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=650,
+                system=sistema_correcao,
+                messages=messages,
+            )
+            texto_corrigido = "".join(
+                b.text for b in correcao.content if b.type == "text"
+            ).strip()
+            if texto_corrigido:
+                resposta_final = texto_corrigido
+        except Exception as e:
+            logger.error(
+                f"Falha ao reescrever resposta que perguntava quantidade antes do mínimo: {e}"
+            )
+
     return resposta_final
