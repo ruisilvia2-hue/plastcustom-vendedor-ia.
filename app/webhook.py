@@ -27,7 +27,6 @@ from app.whatsapp import (
 from app.ia import gerar_resposta, SYSTEM_PROMPT
 from app.precos import recarregar_tabela_precos
 from app.antibot import verificar_antibot
-from app.cro import registrar_evento
 
 bp = Blueprint("webhook", __name__)
 
@@ -149,12 +148,6 @@ def webhook():
         if bot_esta_pausado(conversa["id"]):
             registro = mensagem or "[cliente enviou mídia durante atendimento humano]"
             salvar_mensagem(conversa["id"], "cliente", registro)
-            registrar_evento(
-                str(conversa["id"]),
-                str(cliente["id"]),
-                "mensagem_cliente",
-                {"origem": "webhook", "bot_pausado": True},
-            )
             logger.info(
                 "Mensagem recebida durante atendimento humano - bot permaneceu silencioso",
                 extra={"evento": "bot_pausado_silencio", "conversa_id": conversa["id"]},
@@ -241,12 +234,6 @@ def webhook():
         if not texto_cliente and not imagens:
             registro = "[cliente enviou uma mídia não suportada para análise]"
             salvar_mensagem(conversa["id"], "cliente", registro)
-            registrar_evento(
-                str(conversa["id"]),
-                str(cliente["id"]),
-                "mensagem_cliente",
-                {"origem": "webhook", "midia_nao_suportada": True},
-            )
 
             if ha_imagem_no_lote and falhas_imagem:
                 resposta = (
@@ -265,12 +252,6 @@ def webhook():
                 )
 
             salvar_mensagem(conversa["id"], "ia", resposta)
-            registrar_evento(
-                str(conversa["id"]),
-                str(cliente["id"]),
-                "resposta_ia",
-                {"origem": "webhook", "resposta_reserva_midia": True},
-            )
             return jsonify({"ok": True, "resposta": resposta}), 200
 
         if imagens and not texto_cliente:
@@ -288,16 +269,6 @@ def webhook():
 
         timestamp_minha_mensagem = salvar_mensagem(
             conversa["id"], "cliente", registro_historico
-        )
-        registrar_evento(
-            str(conversa["id"]),
-            str(cliente["id"]),
-            "mensagem_cliente",
-            {
-                "origem": "webhook",
-                "tem_imagem": bool(imagens),
-                "quantidade_imagens": len(imagens),
-            },
         )
 
         # Mantém a proteção existente contra respostas concorrentes.
@@ -378,12 +349,6 @@ def webhook():
             )
 
         salvar_mensagem(conversa["id"], "ia", resposta)
-        registrar_evento(
-            str(conversa["id"]),
-            str(cliente["id"]),
-            "resposta_ia",
-            {"origem": "webhook"},
-        )
         lead = calcular_score(conversa["id"], cliente["id"])
 
         if lead["score"] >= 80:
