@@ -22,6 +22,71 @@ def _safe_json(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _garantir_estrutura_cro() -> bool:
+    """Cria somente as estruturas pertencentes ao CRO, de forma idempotente."""
+    if not _garantir_estrutura_cro():
+        return {"horas": horas, "eventos": {}, "conversas": {}, "taxas": {}, "hipoteses": []}
+    db = get_db()
+    cur = db.cursor()
+    try:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cro_experimentos (
+                id BIGSERIAL PRIMARY KEY,
+                nome VARCHAR(160) NOT NULL,
+                hipotese TEXT NOT NULL,
+                metrica VARCHAR(60) NOT NULL,
+                percentual_variante NUMERIC(5,2) NOT NULL DEFAULT 50,
+                status VARCHAR(20) NOT NULL DEFAULT 'draft',
+                criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT cro_experimentos_status_ck
+                    CHECK (status IN ('draft','active','paused','completed'))
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cro_alocacoes (
+                experimento_id BIGINT NOT NULL
+                    REFERENCES cro_experimentos(id) ON DELETE CASCADE,
+                conversa_id UUID NOT NULL,
+                variante VARCHAR(20) NOT NULL,
+                criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (experimento_id, conversa_id)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS cro_eventos (
+                id BIGSERIAL PRIMARY KEY,
+                conversa_id UUID NOT NULL,
+                cliente_id UUID NULL,
+                evento VARCHAR(60) NOT NULL,
+                metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                experimento_id BIGINT NULL
+                    REFERENCES cro_experimentos(id) ON DELETE SET NULL,
+                variante VARCHAR(20) NULL,
+                criado_em TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cro_eventos_data "
+            "ON cro_eventos (criado_em)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cro_eventos_funil "
+            "ON cro_eventos (evento, criado_em)"
+        )
+        db.commit()
+        return True
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "Estrutura CRO indisponível",
+            extra={"evento": "cro_estrutura_falhou", "erro": str(exc)},
+        )
+        return False
+    finally:
+        cur.close()
+        release_db(db)
+
+
 def registrar_evento(conversa_id: str, cliente_id: Optional[str], evento: str,
                      metadata: Optional[Dict[str, Any]] = None,
                      experimento_id: Optional[str] = None,
@@ -30,7 +95,8 @@ def registrar_evento(conversa_id: str, cliente_id: Optional[str], evento: str,
         return False
     if variante is not None and variante not in VARIANTES:
         return False
-    garantir_estrutura_comercial()
+    if not _garantir_estrutura_cro():
+        return False
     db = get_db(); cur = db.cursor()
     try:
         cur.execute("""
@@ -54,7 +120,8 @@ def _bucket(conversa_id: str, experimento_id: str) -> float:
 
 def atribuir_experimento(conversa_id: str, experimento_id: str) -> Optional[str]:
     """Atribui uma variante de forma estável; nunca ativa experimento sozinho."""
-    garantir_estrutura_comercial()
+    if not _garantir_estrutura_cro():
+        return None
     db = get_db(); cur = db.cursor()
     try:
         cur.execute("SELECT percentual_variante, status FROM cro_experimentos WHERE id=%s", (experimento_id,))
@@ -77,7 +144,9 @@ def criar_experimento(nome: str, hipotese: str, metrica: str = "pedido_fechado",
         return {"ok": False, "erro": "dados_invalidos"}
     if not 5 <= float(percentual_variante) <= 95:
         return {"ok": False, "erro": "percentual_fora_do_limite"}
-    garantir_estrutura_comercial(); db = get_db(); cur = db.cursor()
+    if not _garantir_estrutura_cro():
+        return {"ok": False, "erro": "falha_banco"}
+    db = get_db(); cur = db.cursor()
     try:
         cur.execute("""INSERT INTO cro_experimentos
           (nome, hipotese, metrica, percentual_variante, status)
