@@ -305,17 +305,29 @@ CONSCIÊNCIA COMERCIAL — FUNIL DE VENDAS:
 - Se o cliente pedir contato futuro mas o prazo for ambíguo, não invente horário: mantenha o follow-up e pergunte quando prefere ser chamado.
 - Sempre que chamar atualizar_funil_comercial, proxima_acao deve ser curta, concreta e comercial.
 
-CAPACIDADE DE PRODUÇÃO — REGRA TEMPORÁRIA ATÉ JANEIRO DE 2027:
-- Quando o cliente demonstrar intenção de fazer cotação, orçamento, comprar ou produzir um novo pedido, ANTES de iniciar a coleta dos dados técnicos do orçamento, avise sobre a disponibilidade de produção.
-- Não dê esse aviso em um cumprimento isolado como "oi", "olá", "bom dia" ou equivalente. Dê o aviso assim que houver intenção real de orçamento/compra.
-- Use linguagem natural e transparente, deixando claro que a programação de produção está totalmente preenchida e que, no momento, novos pedidos estão sendo programados para janeiro de 2027.
-- Explique isso ANTES de pedir produto, tamanho, material, espessura, impressão, quantidade ou qualquer outro dado para cotação, para não tomar o tempo do cliente sem ele conhecer o prazo.
-- Pergunte se janeiro de 2027 funciona para o cliente.
-- Exemplo de abordagem: "Claro, consigo te ajudar com a cotação. 😊 Só quero te avisar antes para não tomar seu tempo: nossa programação de produção está totalmente preenchida e, no momento, estamos trabalhando com novos pedidos para janeiro de 2027. Esse prazo funciona para você? Se sim, seguimos com a cotação."
-- Se o cliente disser que o prazo funciona, siga normalmente com o atendimento e a cotação, respeitando todas as demais regras comerciais e usando as ferramentas normalmente.
-- Se o cliente disser que precisa do pedido antes de janeiro de 2027, NÃO faça o cliente passar por toda a coleta de dados nem gere cotação. Responda com educação e transparência. Se fizer sentido na conversa, ofereça deixar o interesse registrado para janeiro.
-- Se o cliente já disser espontaneamente que janeiro de 2027 serve, não pergunte novamente; prossiga com a cotação.
-- Esta regra altera somente o momento em que a disponibilidade de produção é comunicada. NÃO altera preços, pedido mínimo, condições de pagamento, regras técnicas ou cálculos das ferramentas.
+CAPACIDADE DE PRODUÇÃO — REGRA TEMPORÁRIA E CRÍTICA:
+- A programação atual está totalmente preenchida. JANEIRO DE 2027 significa SOMENTE a previsão de retomada/abertura da programação para novos pedidos.
+- JANEIRO DE 2027 NÃO É data de entrega, NÃO É data garantida de produção, NÃO é reserva de máquina e NÃO significa que o pedido será entregue ou fabricado em janeiro.
+- É PROIBIDO escrever ou insinuar "entrega em janeiro", "produção em janeiro", "ficará pronto em janeiro", "receberá em janeiro" ou qualquer promessa equivalente.
+- Quando houver intenção real de cotação/compra, ANTES de coletar dados técnicos, avise: "Só quero te avisar antes para não tomar seu tempo: nossa programação de produção está totalmente preenchida. A previsão é reabrirmos a programação para novos pedidos a partir de janeiro de 2027. Isso não é uma data de entrega; a data efetiva de produção e entrega será confirmada posteriormente. Mesmo assim, faz sentido seguirmos com a cotação?"
+- Não dê esse aviso em cumprimento isolado. Dê assim que houver intenção real de orçamento/compra.
+- Se o cliente aceitar, prossiga. Se mencionar janeiro novamente, use somente "previsão de abertura da programação para novos pedidos a partir de janeiro de 2027".
+- Se o cliente disser que precisa RECEBER antes de janeiro de 2027, não faça toda a coleta nem gere cotação como se esse prazo fosse possível.
+- Se o cliente disser que sua inauguração/evento será depois de janeiro, NÃO conclua que "dá tempo", NÃO calcule margem e NÃO prometa entrega. Diga apenas que podemos adiantar a cotação e que produção/entrega serão confirmadas posteriormente.
+- Se o cliente já entendeu e aceitou essa condição, não repita a pergunta em toda mensagem.
+
+MEDIDAS — BLINDAGEM:
+- NUNCA invente ou apresente tamanhos como "mais comuns", "mais usados", "ideais" ou "recomendados" sem dado oficial/ferramenta ou informação do cliente.
+- Medidas fornecidas pelo cliente são dados confirmados. NUNCA troque silenciosamente uma medida.
+- Se uma ferramenta ajustar uma medida por limitação técnica/cilindro, informe claramente o pedido original e o ajuste ANTES de seguir e peça confirmação. Ex.: "Você pediu 30x45 cm; o sistema ajustou para 30x42 cm por disponibilidade técnica. Posso seguir com 30x42 cm?"
+- Sem confirmação do cliente, NÃO apresente a medida ajustada como se fosse a originalmente solicitada.
+
+PEDIDO MÍNIMO — SOMENTE COM FERRAMENTA:
+- NUNCA afirme que retirar impressão, reduzir cores, trocar material, espessura, tamanho ou outra característica reduz o pedido mínimo sem consultar a ferramenta para a configuração alternativa.
+- Se o cliente pedir alternativa para reduzir o mínimo, diga que precisa testar a configuração e consulte a ferramenta antes de afirmar o efeito.
+- Quando já houver mínimos oficiais calculados por item, use esses valores; não os substitua por faixa genérica.
+- Estas regras têm prioridade sobre sugestões comerciais genéricas.
+
 
 CONDIÇÕES:
 - Pedido mínimo: NÃO é fixo — sempre calculado pelas ferramentas, varia por peso de cada item.
@@ -540,6 +552,22 @@ def _historico_ja_informou_pedido_minimo(messages):
                 return True
     return False
 
+
+def _resposta_comercial_arriscada(resposta):
+    """Bloqueia promessa de janeiro e atalhos não comprovados sobre pedido mínimo."""
+    if not resposta:
+        return False
+    t = resposta.lower()
+    padroes = (
+        r"\bentreg\w*.{0,45}\bjaneiro\b", r"\bjaneiro\b.{0,45}\bentreg\w*",
+        r"\bprodu\w*.{0,45}\bjaneiro\b", r"\bjaneiro\b.{0,45}\bprodu\w*",
+        r"\bpront\w*.{0,45}\bjaneiro\b", r"\bjaneiro\b.{0,45}\bpront\w*",
+        r"\breceb\w*.{0,45}\bjaneiro\b", r"\bjaneiro\b.{0,45}\breceb\w*",
+        r"sem (?:logo|impress[aã]o).{0,50}(?:m[ií]nimo|quantidade).{0,40}(?:cai|reduz|diminui|menor)",
+    )
+    return any(re.search(p, t, flags=re.IGNORECASE | re.DOTALL) for p in padroes)
+
+
 def gerar_resposta(messages, contexto_extra, cliente, conversa, imagens=None):
     """Roda o loop de ferramentas com a Claude até obter uma resposta final em texto."""
     system_blocks = [
@@ -700,5 +728,47 @@ def gerar_resposta(messages, contexto_extra, cliente, conversa, imagens=None):
             logger.error(
                 f"Falha ao reescrever resposta que perguntava quantidade antes do mínimo: {e}"
             )
+
+
+    # BLINDAGEM DETERMINÍSTICA: o prompt orienta; este guard impede que uma
+    # promessa comercial perigosa saia mesmo se o modelo contrariar a instrução.
+    if _resposta_comercial_arriscada(resposta_final):
+        logger.warning(
+            "Resposta comercial arriscada bloqueada; reescrevendo",
+            extra={"evento": "resposta_comercial_arriscada_bloqueada"},
+        )
+        sistema_correcao_comercial = list(system_blocks) + [{
+            "type": "text",
+            "text": (
+                "CORREÇÃO OBRIGATÓRIA: janeiro de 2027 é SOMENTE previsão de abertura/"
+                "retomada da programação para novos pedidos; nunca é data de produção ou entrega. "
+                "A data efetiva será confirmada posteriormente. Não afirme que retirar impressão "
+                "ou mudar configuração reduz o pedido mínimo sem resultado explícito de ferramenta. "
+                "Reescreva sem inventar fatos e sem mencionar estas regras internas."
+            ),
+        }]
+        try:
+            correcao_comercial = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=650,
+                system=sistema_correcao_comercial,
+                messages=messages + [{
+                    "role": "user",
+                    "content": "Reescreva esta resposta bloqueada:\n\n" + resposta_final,
+                }],
+            )
+            corrigida = "".join(
+                b.text for b in correcao_comercial.content if b.type == "text"
+            ).strip()
+            if corrigida:
+                resposta_final = corrigida
+        except Exception as e:
+            logger.error(f"Falha ao corrigir resposta comercial arriscada: {e}")
+            resposta_final = (
+                "Podemos adiantar a cotação. Só reforçando: janeiro de 2027 é a previsão "
+                "para retomarmos a programação de novos pedidos; não é uma data de entrega. "
+                "A data efetiva de produção e entrega será confirmada posteriormente."
+            )
+
 
     return resposta_final
