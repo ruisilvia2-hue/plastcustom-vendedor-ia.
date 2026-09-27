@@ -160,6 +160,8 @@ def executar_calcular_orcamento(conversa_id: str, entrada: Dict[str, Any]) -> Di
       erro="dados_incompletos"          -> faltou informar algum campo obrigatório
       erro="nao_confirmado"             -> este item não está salvo no pedido confirmado
       erro="divergencia_do_estado_salvo" -> algum valor não bate com o que já foi confirmado
+      Exceção: comparar_impressao=true permite variar SOMENTE FRENTE x FRENTE_VERSO
+      quando o cliente pediu explicitamente essa comparação; todos os outros campos seguem protegidos.
       erro="valor_invalido"             -> algum valor veio num formato/opção que não faz sentido
       erro="fora_da_faixa"              -> dados válidos, mas o peso fica abaixo do mínimo
     Em todo erro, "mensagem" já vem pronta em português, pra IA usar (ou se inspirar) na resposta ao cliente.
@@ -197,20 +199,78 @@ def executar_calcular_orcamento(conversa_id: str, entrada: Dict[str, Any]) -> Di
             "mensagem": "Estes dados ainda não foram confirmados e salvos no pedido. Chame atualizar_pedido primeiro com os dados que o cliente já confirmou nesta conversa, e pergunte ao cliente qualquer campo que ainda esteja faltando - não calcule com valores supostos.",
         }
 
+    # Segurança: campos críticos só podem ser usados se estiverem realmente
+    # confirmados no estado salvo. Isso evita a IA preencher um campo ausente
+    # "por conta própria" só para conseguir calcular.
+    nao_confirmados = [
+        c for c in CAMPOS_CRITICOS_ORCAMENTO
+        if item_correspondente.get(c) is None
+    ]
+    if nao_confirmados:
+        logger.warning(
+            "calcular_orcamento com campos críticos ainda não confirmados",
+            extra={
+                "evento": "orcamento_campos_nao_confirmados",
+                "conversa_id": conversa_id,
+                "campos": nao_confirmados,
+            },
+        )
+        return {
+            "erro": "nao_confirmado",
+            "mensagem": (
+                "Ainda faltam confirmações reais do cliente antes de calcular: "
+                + ", ".join(nao_confirmados)
+                + ". Atualize o pedido somente com o que o cliente confirmou e pergunte o que estiver faltando."
+            ),
+            "campos_faltando": nao_confirmados,
+        }
+
     divergentes = [
         c for c in CAMPOS_CRITICOS_ORCAMENTO
-        if item_correspondente.get(c) is not None and item_correspondente.get(c) != entrada.get(c)
+        if item_correspondente.get(c) != entrada.get(c)
     ]
-    if divergentes:
+
+    # Caso legítimo: o cliente pediu explicitamente uma COMPARAÇÃO entre
+    # "somente frente" e "frente e verso". Nesse cenário, permitimos que SOMENTE
+    # o campo impressao seja diferente do estado-base. Material, espessura,
+    # número de cores e quantidade continuam obrigatoriamente idênticos ao que
+    # foi confirmado e salvo.
+    comparar_impressao = entrada.get("comparar_impressao") is True
+    somente_impressao_diverge = (
+        len(divergentes) == 1 and divergentes[0] == "impressao"
+    )
+
+    if divergentes and not (comparar_impressao and somente_impressao_diverge):
         logger.warning(
             "calcular_orcamento com valores divergentes do estado salvo",
-            extra={"evento": "orcamento_divergencia", "conversa_id": conversa_id, "campos": divergentes},
+            extra={
+                "evento": "orcamento_divergencia",
+                "conversa_id": conversa_id,
+                "campos": divergentes,
+                "comparar_impressao": comparar_impressao,
+            },
         )
         return {
             "erro": "divergencia_do_estado_salvo",
-            "mensagem": f"Os valores de {', '.join(divergentes)} não batem com o que está salvo no pedido confirmado. Use os valores que o cliente já confirmou (via atualizar_pedido), ou pergunte de novo se realmente mudou e atualize o pedido antes de calcular.",
+            "mensagem": (
+                f"Os valores de {', '.join(divergentes)} não batem com o que está salvo no pedido confirmado. "
+                "Use os valores que o cliente já confirmou (via atualizar_pedido), ou pergunte de novo se realmente "
+                "mudou e atualize o pedido antes de calcular. Se o cliente pediu explicitamente para comparar "
+                "SOMENTE frente versus frente e verso, use comparar_impressao=true sem alterar nenhum outro campo."
+            ),
             "campos_divergentes": divergentes,
         }
+
+    if comparar_impressao and somente_impressao_diverge:
+        logger.info(
+            "Alternativa de impressão autorizada para comparação",
+            extra={
+                "evento": "orcamento_comparacao_impressao",
+                "conversa_id": conversa_id,
+                "impressao_base": item_correspondente.get("impressao"),
+                "impressao_alternativa": entrada.get("impressao"),
+            },
+        )
 
     if produto not in PRODUTOS_VALIDOS:
         return {
@@ -313,6 +373,10 @@ def executar_calcular_orcamento(conversa_id: str, entrada: Dict[str, Any]) -> Di
         "preco_total": calc["total"],
         "peso_total_kg": calc["peso_total_kg"],
         "preco_especial_aplicado": calc.get("preco_especial_aplicado", False),
+        "comparacao_impressao": bool(
+            comparar_impressao and somente_impressao_diverge
+        ),
+        "impressao_base_confirmada": item_correspondente.get("impressao"),
     }
 
 
@@ -477,7 +541,7 @@ TOOLS = [
     },
     {
         "name": "calcular_orcamento",
-        "description": "Calcula o preço OFICIAL e final do pedido. É a única forma válida de informar preço ao cliente - NUNCA calcule ou estime um valor por conta própria. Use somente quando já tiver TODAS as informações confirmadas pelo cliente e salvas via atualizar_pedido: produto, material, tamanho, espessura, cores e quantidade em milheiros. Se algum valor não foi confirmado pelo cliente, esta ferramenta vai recusar - não tente contornar inventando o dado.",
+        "description": "Calcula o preço OFICIAL e final do pedido. É a única forma válida de informar preço ao cliente - NUNCA calcule ou estime um valor por conta própria. Use somente quando já tiver TODAS as informações confirmadas pelo cliente e salvas via atualizar_pedido: produto, material, tamanho, espessura, cores, impressão e quantidade em milheiros. Se algum valor não foi confirmado pelo cliente, esta ferramenta vai recusar - não tente contornar inventando o dado. EXCEÇÃO CONTROLADA: se o cliente pedir EXPLICITAMENTE para comparar as duas modalidades de impressão (somente frente versus frente e verso), calcule primeiro a configuração-base salva normalmente e depois calcule a outra modalidade com comparar_impressao=true. Nesse modo, SOMENTE 'impressao' pode diferir; material, tamanho, espessura, cores e quantidade devem permanecer exatamente iguais ao estado confirmado.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -490,6 +554,10 @@ TOOLS = [
                 "cores_n": {"type": "integer", "description": "número de cores de impressão (0 se sem impressão)"},
                 "impressao": {"type": "string", "enum": ["FRENTE", "FRENTE_VERSO"]},
                 "milheiros": {"type": "number", "description": "quantidade pedida, em milheiros (mil unidades)"},
+                "comparar_impressao": {
+                    "type": "boolean",
+                    "description": "Use true SOMENTE quando o cliente pediu explicitamente comparação de preço entre impressão somente frente e frente e verso. Nesse modo apenas o campo 'impressao' pode variar em relação ao pedido salvo; todos os demais campos devem permanecer idênticos. Não use para adivinhar uma opção que o cliente não pediu."
+                },
             },
             "required": ["produto", "material", "largura", "altura", "espessura", "cores_n", "impressao", "milheiros"],
         },
